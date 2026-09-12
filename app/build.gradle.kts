@@ -10,8 +10,8 @@ android {
         applicationId = "com.jorge.pixelstatusbar.oneui.v4"
         minSdk = 31
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.13-watchdog-v2"
+        versionCode = 15
+        versionName = "0.14-pixel-geometry"
     }
 
     compileOptions {

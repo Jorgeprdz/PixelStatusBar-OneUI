@@ -1,0 +1,162 @@
+name: Extract S931B CCZH1 kernel inputs
+
+on:
+  push:
+    branches:
+      - firmware-extract-cczh1
+    paths:
+      - .github/workflows/extract-s931b-cczh1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      MODEL: SM-S931B
+      REGION: MXO
+      EXPECTED_AP: S931BXXSCCZH1
+      SAMLOADER_VERSION: 2.1.0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo '=== BEFORE CLEANUP ==='
+          df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /opt/hostedtoolcache || true
+          sudo docker system prune -af || true
+          sudo apt-get clean || true
+          echo '=== AFTER CLEANUP ==='
+          df -h /
+
+      - name: Install samloader-rs 2.1.0
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/samloader"
+          curl -fL --retry 5 --retry-all-errors \
+            "https://github.com/topjohnwu/samloader-rs/releases/download/${SAMLOADER_VERSION}/samloader-v${SAMLOADER_VERSION}-linux-x86_64.zip" \
+            -o "$RUNNER_TEMP/samloader.zip"
+          unzip -q "$RUNNER_TEMP/samloader.zip" -d "$RUNNER_TEMP/samloader"
+          SAMLOADER_BIN="$(find "$RUNNER_TEMP/samloader" -type f -name samloader | head -1)"
+          test -n "$SAMLOADER_BIN"
+          chmod +x "$SAMLOADER_BIN"
+          echo "SAMLOADER_BIN=$SAMLOADER_BIN" >> "$GITHUB_ENV"
+          "$SAMLOADER_BIN" --version
+
+      - name: Resolve exact Samsung FUS firmware
+        shell: bash
+        run: |
+          set -euxo pipefail
+          VERSION="$($SAMLOADER_BIN check-update -m "$MODEL" -r "$REGION" | tail -n 1 | tr -d '\r')"
+          echo "FUS version: $VERSION"
+          AP="${VERSION%%/*}"
+          if [ "$AP" != "$EXPECTED_AP" ]; then
+            echo "Expected $EXPECTED_AP but FUS returned $AP" >&2
+            echo "Refusing to download a different build." >&2
+            exit 42
+          fi
+          echo "FIRMWARE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/cczh1-out"
+          printf '%s\n' "$VERSION" > "$RUNNER_TEMP/cczh1-out/firmware-version.txt"
+
+      - name: Download and decrypt official firmware on the fly
+        shell: bash
+        run: |
+          set -euxo pipefail
+          df -h /
+          "$SAMLOADER_BIN" download \
+            -m "$MODEL" \
+            -r "$REGION" \
+            -v "$FIRMWARE_VERSION" \
+            -j 8 \
+            -o "$RUNNER_TEMP/S931BXXSCCZH1-firmware.zip"
+          ls -lh "$RUNNER_TEMP/S931BXXSCCZH1-firmware.zip"
+          df -h /
+
+      - name: Stream-extract boot.img.lz4 and sboot.bin.lz4 only
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export FWZIP="$RUNNER_TEMP/S931BXXSCCZH1-firmware.zip"
+          export OUTDIR="$RUNNER_TEMP/cczh1-out"
+          /usr/bin/python3 - <<'PY'
+          import hashlib
+          import os
+          import shutil
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          fw = Path(os.environ['FWZIP'])
+          out = Path(os.environ['OUTDIR'])
+          out.mkdir(parents=True, exist_ok=True)
+
+          def pick(names, prefix):
+              hits = [n for n in names if Path(n).name.startswith(prefix) and n.endswith('.tar.md5')]
+              if not hits:
+                  raise RuntimeError(f'No {prefix}*.tar.md5 entry found in firmware ZIP')
+              return hits[0]
+
+          def extract_nested_tar_member(zf, zip_entry, wanted, dest):
+              print(f'Opening {zip_entry}')
+              with zf.open(zip_entry, 'r') as stream:
+                  with tarfile.open(fileobj=stream, mode='r|*') as tf:
+                      for member in tf:
+                          if Path(member.name).name != wanted:
+                              continue
+                          src = tf.extractfile(member)
+                          if src is None:
+                              raise RuntimeError(f'{wanted} exists but is not a regular file')
+                          with open(dest, 'wb') as dst:
+                              shutil.copyfileobj(src, dst, length=8 * 1024 * 1024)
+                          print(f'Extracted {wanted}: {Path(dest).stat().st_size} bytes')
+                          return
+              raise RuntimeError(f'{wanted} not found inside {zip_entry}')
+
+          with zipfile.ZipFile(fw, 'r') as zf:
+              names = zf.namelist()
+              (out / 'firmware-zip-contents.txt').write_text('\n'.join(names) + '\n')
+              ap = pick(names, 'AP_')
+              bl = pick(names, 'BL_')
+              (out / 'selected-packages.txt').write_text(f'AP={ap}\nBL={bl}\n')
+              extract_nested_tar_member(zf, ap, 'boot.img.lz4', out / 'boot.img.lz4')
+              extract_nested_tar_member(zf, bl, 'sboot.bin.lz4', out / 'sboot.bin.lz4')
+
+          for p in [out / 'boot.img.lz4', out / 'sboot.bin.lz4']:
+              h = hashlib.sha256()
+              with open(p, 'rb') as f:
+                  for chunk in iter(lambda: f.read(8 * 1024 * 1024), b''):
+                      h.update(chunk)
+              with open(out / 'SHA256SUMS', 'a') as sums:
+                  sums.write(f'{h.hexdigest()}  {p.name}\n')
+          PY
+          ls -lh "$RUNNER_TEMP/cczh1-out"
+
+      - name: Remove full firmware archive before upload
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/S931BXXSCCZH1-firmware.zip" || true
+          df -h / || true
+
+      - name: Upload exact CCZH1 inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: S931BXXSCCZH1-kernel-inputs
+          path: ${{ runner.temp }}/cczh1-out/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

@@ -10,8 +10,8 @@ android {
         applicationId = "com.jorge.pixelstatusbar.oneui.v4"
         minSdk = 31
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.12-wifi-clean-lifecycle"
+        versionCode = 14
+        versionName = "0.13-watchdog-v2"
     }
 
     compileOptions {

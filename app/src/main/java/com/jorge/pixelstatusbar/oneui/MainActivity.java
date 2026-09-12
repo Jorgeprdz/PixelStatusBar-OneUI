@@ -39,7 +39,7 @@ public final class MainActivity extends Activity {
 
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
-        TextView sub = text("v0.5 · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
+        TextView sub = text("v0.6 · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
         sub.setAlpha(.70f); sub.setPadding(0, dp(6), 0, dp(28)); root.addView(sub);
 
         masterSwitch = new Switch(this);
@@ -51,13 +51,13 @@ public final class MainActivity extends Activity {
         statusText = text("Comprobando…", 16, false);
         statusText.setPadding(0, dp(18), 0, dp(28)); root.addView(statusText);
 
-        TextView safety = text("ON usa root sólo para crear FRRO temporales. No toca /system, boot, vbmeta, SystemUI.apk ni service.d. Si algo falla, desactiva todo y deja Samsung intacto.", 14, false);
+        TextView safety = text("v0.6 no crea PNG ni escribe recursos. Sólo apunta temporalmente los drawables de estado a iconos que ya existen dentro de tu SystemUI. Si algo falla, desactiva todo y deja Samsung intacto.", 14, false);
         safety.setAlpha(.72f); root.addView(safety);
 
         masterSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
             if (updating) return;
             masterSwitch.setEnabled(false);
-            statusText.setText(checked ? "Activando de forma segura…" : "Restaurando Samsung…");
+            statusText.setText(checked ? "Activando referencias seguras…" : "Restaurando Samsung…");
             worker.execute(() -> {
                 RootOverlayController.Result r = checked ? RootOverlayController.enable(this) : RootOverlayController.disable();
                 runOnUiThread(() -> {
@@ -79,15 +79,19 @@ public final class MainActivity extends Activity {
             boolean on = RootOverlayController.isEnabled();
             runOnUiThread(() -> {
                 updating = true; masterSwitch.setChecked(on); updating = false;
-                statusText.setText(on ? "ON · FRRO temporales activos" : "OFF · One UI original");
+                statusText.setText(on ? "ON · referencias temporales activas" : "OFF · One UI original");
                 masterSwitch.setEnabled(true);
             });
         });
     }
 
     private TextView text(String value, int sp, boolean bold) {
-        TextView v = new TextView(this); v.setText(value); v.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
-        if (bold) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD); return v;
+        TextView v = new TextView(this);
+        v.setText(value);
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        if (bold) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return v;
     }
+
     private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
 }

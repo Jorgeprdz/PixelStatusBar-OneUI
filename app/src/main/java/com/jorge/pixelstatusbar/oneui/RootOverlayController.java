@@ -5,7 +5,7 @@ import android.content.Context;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
-/** v0.11: one independent FRRO + watchdog per status-bar element. */
+/** v0.12: modular FRROs; Wi-Fi gets a fresh overlay identity every activation. */
 final class RootOverlayController {
     static final String MOBILE = "mobile";
     static final String WIFI_BASE = "wifi_base";
@@ -13,8 +13,13 @@ final class RootOverlayController {
     static final String BATTERY = "battery";
     static final String CLOCK = "clock";
 
-    private static final String MOBILE_OVERLAY = "com.android.shell:PixelStatusNative";
-    private static final String OLD_WIFI_OVERLAY = "com.android.shell:PixelStatusWifi";
+    private static final String OWNER = "com.android.shell:";
+    private static final String MOBILE_OVERLAY = OWNER + "PixelStatusNative";
+    private static final String OLD_WIFI_OVERLAY = OWNER + "PixelStatusWifi";
+    private static final String LEGACY_WIFI_BASE = OWNER + "PixelStatusWifiBase";
+    private static final String LEGACY_WIFI6 = OWNER + "PixelStatusWifi6";
+    private static final String BATTERY_OVERLAY = OWNER + "PixelStatusBattery";
+    private static final String CLOCK_OVERLAY = OWNER + "PixelStatusClock";
 
     static final class Result {
         final boolean ok;
@@ -29,136 +34,267 @@ final class RootOverlayController {
     }
 
     static Result enable(Context context, String element) {
-        String overlay = overlayFor(element);
+        String overlay = "";
+        String simpleName = null;
         String watchdogPid = "";
         try {
             Result root = requireRoot();
             if (!root.ok) return root;
 
-            if (WIFI_BASE.equals(element) || WIFI6.equals(element)) disableOldWifi();
-            disableOverlay(overlay);
-
             String apk = shellQuote(context.getApplicationInfo().sourceDir);
             String helper;
-            if (MOBILE.equals(element)) {
+
+            if (isWifi(element)) {
+                cleanupWifiElement(context, element);
+                if (!waitForSystemUiStable()) {
+                    writeState(element, "AUTO_REVERTED");
+                    return new Result(false, label(element) + ": SystemUI aún no estaba estable; no activé nada.");
+                }
+
+                simpleName = uniqueWifiSimpleName(element);
+                overlay = OWNER + simpleName;
                 helper = "CLASSPATH=" + apk + " app_process /system/bin "
-                        + "com.jorge.pixelstatusbar.oneui.FrroHelper register 2>&1";
+                        + "com.jorge.pixelstatusbar.oneui.ElementFrroHelper " + element + " '" + simpleName + "' 2>&1";
             } else {
-                helper = "CLASSPATH=" + apk + " app_process /system/bin "
-                        + "com.jorge.pixelstatusbar.oneui.ElementFrroHelper " + element + " 2>&1";
+                overlay = fixedOverlayFor(element);
+                disableOverlay(overlay);
+                if (MOBILE.equals(element)) {
+                    helper = "CLASSPATH=" + apk + " app_process /system/bin "
+                            + "com.jorge.pixelstatusbar.oneui.FrroHelper register 2>&1";
+                } else {
+                    helper = "CLASSPATH=" + apk + " app_process /system/bin "
+                            + "com.jorge.pixelstatusbar.oneui.ElementFrroHelper " + element + " 2>&1";
+                }
             }
 
             ExecResult reg = su(helper);
             if (reg.code != 0 || !reg.out.contains("REGISTERED")) {
                 disableOverlay(overlay);
+                if (simpleName != null) unregisterSimple(context, simpleName);
+                clearTrackedOverlay(element);
                 writeState(element, "AUTO_REVERTED");
                 return new Result(false, label(element) + ": no pude registrar FRRO:\n" + firstUseful(reg.out, 1000));
             }
 
+            if (isWifi(element)) writeTrackedOverlay(element, overlay);
+
             String pidBefore = systemUiPid();
             if (pidBefore.isBlank()) {
                 disableOverlay(overlay);
+                if (simpleName != null) unregisterSimple(context, simpleName);
+                clearTrackedOverlay(element);
                 writeState(element, "AUTO_REVERTED");
-                return new Result(false, label(element) + ": SystemUI no estaba estable antes de probar.");
+                return new Result(false, label(element) + ": SystemUI no estaba disponible antes de probar.");
             }
 
-            watchdogPid = armWatchdog(element, overlay);
+            watchdogPid = armWatchdog(context, element, overlay, simpleName);
             writeState(element, "TESTING");
 
             ExecResult en = su("cmd overlay enable --user 0 '" + overlay + "' 2>&1");
             if (en.code != 0) {
                 disableOverlay(overlay);
+                if (simpleName != null) unregisterSimple(context, simpleName);
+                clearTrackedOverlay(element);
                 cancelWatchdog(watchdogPid);
                 writeState(element, "AUTO_REVERTED");
                 return new Result(false, label(element) + ": Samsung rechazó activarlo:\n" + firstUseful(en.out, 900));
             }
             su("cmd overlay set-priority '" + overlay + "' highest >/dev/null 2>&1 || true");
 
-            if (!isEnabled(element)) {
+            if (!isOverlayEnabled(overlay)) {
                 disableOverlay(overlay);
+                if (simpleName != null) unregisterSimple(context, simpleName);
+                clearTrackedOverlay(element);
                 cancelWatchdog(watchdogPid);
                 writeState(element, "AUTO_REVERTED");
-                return new Result(false, label(element) + ": no quedó activo; se restauró Samsung.");
+                return new Result(false, label(element) + ": no quedó activo; Samsung restaurado.");
             }
 
+            // Strict stability test: one SystemUI PID change is enough to reject this activation.
             Thread.sleep(1800);
             String pid1 = systemUiPid();
-            Thread.sleep(4200);
+            Thread.sleep(4300);
             String pid2 = systemUiPid();
 
-            boolean stable = pidBefore.equals(pid1) && pidBefore.equals(pid2) && isEnabled(element);
+            boolean stable = pidBefore.equals(pid1) && pidBefore.equals(pid2) && isOverlayEnabled(overlay);
             if (!stable) {
                 disableOverlay(overlay);
+                if (simpleName != null) unregisterSimple(context, simpleName);
+                clearTrackedOverlay(element);
                 writeState(element, "AUTO_REVERTED");
-                return new Result(false, label(element) + ": AUTO-REVERTIDO; SystemUI cambió/reinició durante la prueba.");
+                return new Result(false, label(element) + ": AUTO-REVERTIDO; SystemUI reinició/cambió durante la prueba.");
             }
 
             cancelWatchdog(watchdogPid);
             writeState(element, "STABLE");
             return new Result(true, label(element) + ": ESTABLE · watchdog superado.");
         } catch (InterruptedException e) {
-            disableOverlay(overlay);
+            if (!overlay.isBlank()) disableOverlay(overlay);
+            if (simpleName != null) unregisterSimple(context, simpleName);
+            clearTrackedOverlay(element);
             writeState(element, "AUTO_REVERTED");
             return new Result(false, label(element) + ": prueba interrumpida; restaurado.");
         } catch (Throwable t) {
-            try { disableOverlay(overlay); } catch (Throwable ignored) {}
+            try { if (!overlay.isBlank()) disableOverlay(overlay); } catch (Throwable ignored) {}
+            try { if (simpleName != null) unregisterSimple(context, simpleName); } catch (Throwable ignored) {}
+            clearTrackedOverlay(element);
             writeState(element, "AUTO_REVERTED");
             return new Result(false, label(element) + ": fallo seguro: " + t.getClass().getSimpleName());
         }
     }
 
-    static Result disable(String element) {
-        String overlay = overlayFor(element);
-        disableOverlay(overlay);
-        if (WIFI_BASE.equals(element) || WIFI6.equals(element)) disableOldWifi();
+    static Result disable(Context context, String element) {
+        if (isWifi(element)) {
+            String tracked = readTrackedOverlay(element);
+            if (!tracked.isBlank()) {
+                disableOverlay(tracked);
+                unregisterSimple(context, simpleNameFromId(tracked));
+            }
+            String legacy = WIFI_BASE.equals(element) ? LEGACY_WIFI_BASE : LEGACY_WIFI6;
+            disableOverlay(legacy);
+            unregisterSimple(context, simpleNameFromId(legacy));
+            clearTrackedOverlay(element);
+        } else {
+            disableOverlay(fixedOverlayFor(element));
+        }
+
         boolean off = !isEnabled(element);
         writeState(element, off ? "OFF" : "ERROR");
         return off
                 ? new Result(true, label(element) + ": OFF · Samsung restaurado.")
-                : new Result(false, label(element) + ": no pude desactivar el FRRO.");
-    }
-
-    static Result restoreAll() {
-        Result root = requireRoot();
-        if (!root.ok) return root;
-        String[] elements = {MOBILE, WIFI_BASE, WIFI6, BATTERY, CLOCK};
-        for (String element : elements) {
-            disableOverlay(overlayFor(element));
-            writeState(element, "OFF");
-        }
-        disableOldWifi();
-        su("for n in PSWifi0 PSWifi1 PSWifi2 PSWifi3 PSWifi4 PSMobile4_0 PSMobile4_1 PSMobile4_2 PSMobile4_3 PSMobile4_4 PSMobile5_0 PSMobile5_1 PSMobile5_2 PSMobile5_3 PSMobile5_4 PSMobile5_5 PixelStatus; do cmd overlay disable --user 0 \"com.android.shell:$n\" >/dev/null 2>&1 || true; done");
-        for (String element : elements) {
-            if (isEnabled(element)) return new Result(false, "No pude restaurar todos los elementos.");
-        }
-        return new Result(true, "TODO RESTAURADO · barra original de Samsung activa.");
+                : new Result(false, label(element) + ": no pude desactivar por completo el FRRO.");
     }
 
     static boolean isEnabled(String element) {
-        return isOverlayEnabled(overlayFor(element));
+        if (isWifi(element)) {
+            String tracked = readTrackedOverlay(element);
+            if (!tracked.isBlank() && isOverlayEnabled(tracked)) return true;
+            String legacy = WIFI_BASE.equals(element) ? LEGACY_WIFI_BASE : LEGACY_WIFI6;
+            return isOverlayEnabled(legacy);
+        }
+        return isOverlayEnabled(fixedOverlayFor(element));
     }
 
     static String state(String element) {
         ExecResult r = su("cat '/data/local/tmp/pixel_status_" + element + ".state' 2>/dev/null | head -1");
         String s = r.out.trim();
         if (isEnabled(element)) return "STABLE".equals(s) ? "ESTABLE" : "ON";
-        if ("AUTO_REVERTED".equals(s)) return "AUTO-REVERTIDO";
-        if ("TESTING".equals(s)) return "AUTO-REVERTIDO";
+        if ("AUTO_REVERTED".equals(s) || "TESTING".equals(s)) return "AUTO-REVERTIDO";
         return "OFF";
     }
 
-    static void cleanupObsoleteWifi() { disableOldWifi(); }
+    static void cleanupObsoleteWifi(Context context) {
+        disableOverlay(OLD_WIFI_OVERLAY);
+        unregisterSimple(context, "PixelStatusWifi");
 
-    private static String armWatchdog(String element, String overlay) {
-        String state = "/data/local/tmp/pixel_status_" + element + ".state";
-        ExecResult wd = su("(sleep 15; cmd overlay disable --user 0 '" + overlay
-                + "' >/dev/null 2>&1; echo AUTO_REVERTED > '" + state
-                + "') >/dev/null 2>&1 & echo $!");
+        disableOverlay(LEGACY_WIFI_BASE);
+        unregisterSimple(context, "PixelStatusWifiBase");
+
+        disableOverlay(LEGACY_WIFI6);
+        unregisterSimple(context, "PixelStatusWifi6");
+    }
+
+    static Result restoreAll(Context context) {
+        Result root = requireRoot();
+        if (!root.ok) return root;
+
+        disableOverlay(MOBILE_OVERLAY);
+        disable(context, WIFI_BASE);
+        disable(context, WIFI6);
+        disableOverlay(BATTERY_OVERLAY);
+        disableOverlay(CLOCK_OVERLAY);
+        disableOverlay(OLD_WIFI_OVERLAY);
+        unregisterSimple(context, "PixelStatusWifi");
+
+        writeState(MOBILE, "OFF");
+        writeState(WIFI_BASE, "OFF");
+        writeState(WIFI6, "OFF");
+        writeState(BATTERY, "OFF");
+        writeState(CLOCK, "OFF");
+
+        boolean allOff = !isEnabled(MOBILE) && !isEnabled(WIFI_BASE) && !isEnabled(WIFI6)
+                && !isEnabled(BATTERY) && !isEnabled(CLOCK);
+        return allOff
+                ? new Result(true, "Todo Samsung restaurado.")
+                : new Result(false, "Quedó algún overlay activo; no desinstales todavía.");
+    }
+
+    private static boolean waitForSystemUiStable() throws InterruptedException {
+        String p0 = systemUiPid();
+        if (p0.isBlank()) return false;
+        Thread.sleep(1300);
+        String p1 = systemUiPid();
+        Thread.sleep(1300);
+        String p2 = systemUiPid();
+        return p0.equals(p1) && p0.equals(p2) && !p2.isBlank();
+    }
+
+    private static void cleanupWifiElement(Context context, String element) {
+        String tracked = readTrackedOverlay(element);
+        if (!tracked.isBlank()) {
+            disableOverlay(tracked);
+            unregisterSimple(context, simpleNameFromId(tracked));
+        }
+        String legacy = WIFI_BASE.equals(element) ? LEGACY_WIFI_BASE : LEGACY_WIFI6;
+        disableOverlay(legacy);
+        unregisterSimple(context, simpleNameFromId(legacy));
+        disableOverlay(OLD_WIFI_OVERLAY);
+        unregisterSimple(context, "PixelStatusWifi");
+        clearTrackedOverlay(element);
+    }
+
+    private static String uniqueWifiSimpleName(String element) {
+        String prefix = WIFI_BASE.equals(element) ? "PixelStatusWifiBase_" : "PixelStatusWifi6_";
+        return prefix + Long.toHexString(System.currentTimeMillis());
+    }
+
+    private static String armWatchdog(Context context, String element, String overlay, String simpleName) {
+        String state = stateFile(element);
+        StringBuilder body = new StringBuilder();
+        body.append("sleep 18; cmd overlay disable --user 0 '").append(overlay).append("' >/dev/null 2>&1; ");
+        if (simpleName != null) {
+            String apk = shellQuote(context.getApplicationInfo().sourceDir);
+            body.append("CLASSPATH=").append(apk).append(" app_process /system/bin ")
+                    .append("com.jorge.pixelstatusbar.oneui.ElementFrroHelper unregister '")
+                    .append(simpleName).append("' >/dev/null 2>&1; ")
+                    .append("rm -f '").append(overlayFile(element)).append("'; ");
+        }
+        body.append("echo AUTO_REVERTED > '").append(state).append("'");
+        ExecResult wd = su("(" + body + ") >/dev/null 2>&1 & echo $!");
         return wd.out.trim();
     }
 
+    private static void unregisterSimple(Context context, String simpleName) {
+        if (simpleName == null || simpleName.isBlank()) return;
+        String apk = shellQuote(context.getApplicationInfo().sourceDir);
+        su("CLASSPATH=" + apk + " app_process /system/bin "
+                + "com.jorge.pixelstatusbar.oneui.ElementFrroHelper unregister '" + simpleName
+                + "' >/dev/null 2>&1 || true");
+    }
+
+    private static void writeTrackedOverlay(String element, String overlay) {
+        su("printf '%s\\n' '" + overlay + "' > '" + overlayFile(element) + "'");
+    }
+
+    private static String readTrackedOverlay(String element) {
+        ExecResult r = su("cat '" + overlayFile(element) + "' 2>/dev/null | head -1");
+        return r.out.trim();
+    }
+
+    private static void clearTrackedOverlay(String element) {
+        if (isWifi(element)) su("rm -f '" + overlayFile(element) + "' >/dev/null 2>&1 || true");
+    }
+
+    private static String overlayFile(String element) {
+        return "/data/local/tmp/pixel_status_" + element + ".overlay";
+    }
+
+    private static String stateFile(String element) {
+        return "/data/local/tmp/pixel_status_" + element + ".state";
+    }
+
     private static void writeState(String element, String state) {
-        su("printf '%s\\n' '" + state + "' > '/data/local/tmp/pixel_status_" + element + ".state' 2>/dev/null || true");
+        su("printf '%s\\n' '" + state + "' > '" + stateFile(element) + "' 2>/dev/null || true");
     }
 
     private static Result requireRoot() {
@@ -169,15 +305,22 @@ final class RootOverlayController {
         return new Result(true, "root");
     }
 
-    private static String overlayFor(String element) {
+    private static boolean isWifi(String element) {
+        return WIFI_BASE.equals(element) || WIFI6.equals(element);
+    }
+
+    private static String fixedOverlayFor(String element) {
         switch (element) {
             case MOBILE: return MOBILE_OVERLAY;
-            case WIFI_BASE: return "com.android.shell:PixelStatusWifiBase";
-            case WIFI6: return "com.android.shell:PixelStatusWifi6";
-            case BATTERY: return "com.android.shell:PixelStatusBattery";
-            case CLOCK: return "com.android.shell:PixelStatusClock";
-            default: throw new IllegalArgumentException("unknown element: " + element);
+            case BATTERY: return BATTERY_OVERLAY;
+            case CLOCK: return CLOCK_OVERLAY;
+            default: throw new IllegalArgumentException("no fixed overlay for " + element);
         }
+    }
+
+    private static String simpleNameFromId(String overlayId) {
+        int i = overlayId.indexOf(':');
+        return i >= 0 ? overlayId.substring(i + 1) : overlayId;
     }
 
     private static String label(String element) {
@@ -192,17 +335,15 @@ final class RootOverlayController {
     }
 
     private static boolean isOverlayEnabled(String overlay) {
+        if (overlay == null || overlay.isBlank()) return false;
         ExecResult r = su("cmd overlay list --user 0 com.android.systemui 2>/dev/null "
                 + "| grep -F '[x] " + overlay + "' >/dev/null");
         return r.code == 0;
     }
 
     private static void disableOverlay(String overlay) {
+        if (overlay == null || overlay.isBlank()) return;
         su("cmd overlay disable --user 0 '" + overlay + "' >/dev/null 2>&1 || true");
-    }
-
-    private static void disableOldWifi() {
-        su("cmd overlay disable --user 0 '" + OLD_WIFI_OVERLAY + "' >/dev/null 2>&1 || true");
     }
 
     private static String systemUiPid() {
@@ -218,7 +359,7 @@ final class RootOverlayController {
         Process p = null;
         try {
             p = new ProcessBuilder("su", "-c", command).redirectErrorStream(true).start();
-            if (!p.waitFor(18, TimeUnit.SECONDS)) {
+            if (!p.waitFor(20, TimeUnit.SECONDS)) {
                 p.destroyForcibly();
                 return new ExecResult(124, "timeout");
             }

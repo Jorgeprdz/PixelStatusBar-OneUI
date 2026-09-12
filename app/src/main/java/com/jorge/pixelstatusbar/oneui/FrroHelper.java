@@ -10,21 +10,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Runs under app_process as uid 0. Builds one temporary shell-owned FRRO.
- * Nothing is written to /system and nothing is installed for boot.
+ * SAFE v0.9: only mobile-signal resources that were already proven stable on this S25.
+ * No Wi-Fi, battery, clock, layout, dimensions or boot-persistent changes.
  */
 public final class FrroHelper {
     private static final String OWNER = "com.android.shell";
     private static final String NAME = "PixelStatusNative";
     private static final String TARGET = "com.android.systemui";
-
-    private static final int[] WIFI_REFS = {
-            0x7e080e33, // ic_wifi_0
-            0x7e080e35, // ic_wifi_1
-            0x7e080e37, // ic_wifi_2
-            0x7e080e39, // ic_wifi_3
-            0x7e080e39  // strongest state
-    };
 
     private static final int[] MOBILE4_REFS = {
             0x7e080c20, 0x7e080c24, 0x7e080c28, 0x7e080c2c, 0x7e080c30
@@ -32,15 +24,6 @@ public final class FrroHelper {
 
     private static final int[] MOBILE5_REFS = {
             0x7e080c22, 0x7e080c26, 0x7e080c2a, 0x7e080c2e, 0x7e080c32, 0x7e080c34
-    };
-
-    // Samsung selects a different drawable family according to Wi-Fi generation.
-    private static final String[] WIFI_PREFIXES = {
-            "stat_sys_wifi_signal_",
-            "stat_sys_wifi5_signal_",
-            "stat_sys_wifi6_signal_",
-            "stat_sys_6ewifi_signal_",
-            "stat_sys_wifi7_signal_"
     };
 
     public static void main(String[] args) {
@@ -76,7 +59,7 @@ public final class FrroHelper {
             setTargetOverlayable.setAccessible(true);
             setTargetOverlayable.invoke(overlay, new Object[]{null});
         } catch (NoSuchMethodException ignored) {
-            // Samsung's own SystemUI FRRO also uses a blank targetOverlayableName.
+            // Samsung's SystemUI fabricated overlay uses no targetOverlayableName.
         }
 
         Field internalField = foClass.getDeclaredField("mOverlay");
@@ -102,57 +85,17 @@ public final class FrroHelper {
         Field data = entryClass.getField("data");
         Field configuration = entryClass.getField("configuration");
 
-        // Wi-Fi 4/5/6/6E/7 -> same Pixel/AOSP glyph family, removing Samsung's generation badge.
-        for (String prefix : WIFI_PREFIXES) {
-            for (int level = 0; level <= 4; level++) {
-                addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
-                        TARGET + ":drawable/" + prefix + level,
-                        0x01, WIFI_REFS[level]);
-            }
-        }
-
-        // Mobile signal (already proven working on this exact S25 in v0.7).
+        // Exactly the mobile-signal mappings that worked in v0.7.
         for (int level = 0; level <= 4; level++) {
-            addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
+            addReference(entries, entryCtor, resourceName, dataType, data, configuration,
                     TARGET + ":drawable/stat_sys_signal_" + level,
-                    0x01, MOBILE4_REFS[level]);
+                    MOBILE4_REFS[level]);
         }
         for (int level = 0; level <= 5; level++) {
-            addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
+            addReference(entries, entryCtor, resourceName, dataType, data, configuration,
                     TARGET + ":drawable/stat_sys_signal_5level_" + level,
-                    0x01, MOBILE5_REFS[level]);
+                    MOBILE5_REFS[level]);
         }
-
-        // Pixel/AOSP status bar metrics. These remain scalar temporary resource overrides;
-        // Samsung's live battery renderer/tint logic stays intact.
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_wifi_signal_size", 15f, 2); // sp
-
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_chip_width", 20.6f, 2);
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_chip_height", 12f, 2);
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_chip_radius", 6f, 2);
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_unified_icon_width", 20.6f, 2);
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_unified_icon_height", 12f, 2);
-
-        // Pixel clock metrics. Samsung hardcodes fontFamily="sec" in status_bar.xml, so we do not
-        // replace that layout; size/padding are safe resource-backed overrides.
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_clock_size", 14f, 2);
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "sec_status_bar_clock_size", 14f, 2);
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_clock_starting_padding", 4f, 1); // dp
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_clock_end_padding", 0f, 1);
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_left_clock_starting_padding", 0f, 1);
-        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_left_clock_end_padding", 2f, 2); // sp
 
         Class<?> txBuilderClass = Class.forName("android.content.om.OverlayManagerTransaction$Builder");
         Object txBuilder = txBuilderClass.getDeclaredConstructor().newInstance();
@@ -181,31 +124,15 @@ public final class FrroHelper {
         commit.invoke(iom, transaction);
     }
 
-    private static void addDimen(List entries, Constructor<?> entryCtor,
+    private static void addReference(List entries, Constructor<?> entryCtor,
             Field resourceName, Field dataType, Field data, Field configuration,
-            String name, float value, int unit) throws Exception {
-        addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
-                TARGET + ":dimen/" + name,
-                0x05, createComplexDimension(value, unit)); // Res_value::TYPE_DIMENSION
-    }
-
-    private static void addEntry(List entries, Constructor<?> entryCtor,
-            Field resourceName, Field dataType, Field data, Field configuration,
-            String targetName, int type, int value) throws Exception {
+            String targetName, int referenceId) throws Exception {
         Object entry = entryCtor.newInstance();
         resourceName.set(entry, targetName);
-        dataType.setInt(entry, type);
-        data.setInt(entry, value);
+        dataType.setInt(entry, 0x01); // Res_value::TYPE_REFERENCE
+        data.setInt(entry, referenceId);
         configuration.set(entry, null);
         entries.add(entry);
-    }
-
-    // Use Android's own encoder instead of duplicating the packed-complex format.
-    private static int createComplexDimension(float value, int unit) throws Exception {
-        Class<?> tv = Class.forName("android.util.TypedValue");
-        Method m = tv.getDeclaredMethod("createComplexDimension", float.class, int.class);
-        m.setAccessible(true);
-        return (Integer) m.invoke(null, value, unit);
     }
 
     private static void exemptHiddenApis() {
@@ -218,7 +145,7 @@ public final class FrroHelper {
             setExemptions.setAccessible(true);
             setExemptions.invoke(runtime, (Object) new String[]{"L"});
         } catch (Throwable ignored) {
-            // app_process/root is commonly exempt already; report a real reflection failure later.
+            // app_process/root is normally exempt; any real failure is reported above.
         }
     }
 

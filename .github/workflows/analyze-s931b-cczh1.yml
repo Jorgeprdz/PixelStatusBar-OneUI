@@ -1,0 +1,197 @@
+name: Analyze S931B CCZH1 kernel profile
+
+on:
+  push:
+    branches:
+      - firmware-extract-cczh1
+    paths:
+      - .github/workflows/analyze-s931b-cczh1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SOURCE_RUN_ID: '34718032521'
+      ARTIFACT_NAME: S931BXXSCCZH1-kernel-inputs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download exact CCZH1 inputs from successful run
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: inputs
+          repository: Jorgeprdz/PixelStatusBar-OneUI
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Verify exact inputs
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ls -lah inputs
+          cat inputs/firmware-version.txt
+          sha256sum inputs/kernel inputs/boot.img inputs/vendor_boot.img inputs/vmlinux.btf inputs/p0_fingerprint.h | tee input-sha256.txt
+          test "$(sha256sum inputs/kernel | awk '{print $1}')" = "3f78b1be1d763ed9ac5a14d6d1d169e8d8801bb2c006b39835e3f0b863f1bca5"
+
+      - name: Install analysis tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends llvm bpftool dwarves python3-pip python3-venv git
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install vmlinux-to-elf
+
+      - name: Recover symbolized vmlinux and kallsyms
+        shell: bash
+        run: |
+          set -euxo pipefail
+          . .venv/bin/activate
+          mkdir -p analysis
+          vmlinux-to-elf inputs/kernel analysis/vmlinux.elf
+          llvm-nm --numeric-sort analysis/vmlinux.elf > analysis/vmlinux.nm
+          wc -l analysis/vmlinux.nm
+          file analysis/vmlinux.elf
+
+      - name: Dump exact BTF layouts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          bpftool btf dump file inputs/vmlinux.btf format raw > analysis/vmlinux-btf.raw
+          bpftool btf dump file inputs/vmlinux.btf format c > analysis/vmlinux-btf.h
+          wc -l analysis/vmlinux-btf.raw analysis/vmlinux-btf.h
+
+      - name: Derive exploit symbol offsets from exact kernel
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          base = 0xffffffc080000000
+          nm = Path('analysis/vmlinux.nm').read_text(errors='replace').splitlines()
+          syms = {}
+          for line in nm:
+              m = re.match(r'^([0-9a-fA-F]+)\s+\S\s+(.+)$', line)
+              if not m: continue
+              addr = int(m.group(1),16)
+              name = m.group(2).strip()
+              syms.setdefault(name, addr)
+
+          wanted = {
+            'CALL_USERMODEHELPER_EXEC_WORK_OFF':'call_usermodehelper_exec_work',
+            'NOOP_LLSEEK_OFF':'noop_llseek',
+            'COPY_SPLICE_READ_OFF':'generic_file_splice_read',
+            'CONFIGFS_READ_ITER_OFF':'configfs_read_iter',
+            'CONFIGFS_BIN_WRITE_ITER_OFF':'configfs_bin_write_iter',
+            'ASHMEM_IOCTL_OFF':'ashmem_ioctl',
+            'ASHMEM_COMPAT_IOCTL_OFF':'compat_ashmem_ioctl',
+            'ASHMEM_MMAP_OFF':'ashmem_mmap',
+            'ASHMEM_OPEN_OFF':'ashmem_open',
+            'ASHMEM_RELEASE_OFF':'ashmem_release',
+            'ASHMEM_SHOW_FDINFO_OFF':'ashmem_show_fdinfo',
+            'ANON_PIPE_BUF_OPS_OFF':'anon_pipe_buf_ops',
+            'ASHMEM_FOPS_OFF':'ashmem_fops',
+            'KMALLOC_CACHES_OFF':'kmalloc_caches',
+            'SYSTEM_UNBOUND_WQ_OFF':'system_unbound_wq',
+            'SLIDE_NFULNL_LOGGER_OBJECT_OFF':'nfulnl_logger',
+            'INIT_TASK_OFF':'init_task',
+            'ROOT_TASK_GROUP_OFF':'root_task_group',
+          }
+          out=[]
+          missing=[]
+          for macro,sym in wanted.items():
+              if sym not in syms:
+                  missing.append((macro,sym)); continue
+              off=syms[sym]-base
+              out.append(f'{macro}=0x{off:08x}  # {sym} @ 0x{syms[sym]:016x}')
+          Path('analysis/derived-symbol-offsets.txt').write_text('\n'.join(out)+'\n')
+          Path('analysis/missing-symbols.txt').write_text('\n'.join(f'{a} {b}' for a,b in missing)+'\n')
+          print('\n'.join(out))
+          if missing:
+              print('MISSING:', missing)
+          PY
+
+      - name: Extract BTF structure members needed by exploit
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          lines=Path('analysis/vmlinux-btf.raw').read_text(errors='replace').splitlines()
+          targets={'task_struct','rt_mutex_waiter','file_operations','workqueue_struct','pool_workqueue','worker_pool','work_struct','page','miscdevice','configfs_buffer'}
+          out=[]; active=False
+          for line in lines:
+              m=re.match(r"\[(\d+)\] STRUCT '([^']+)' size=(\d+) vlen=(\d+)",line)
+              if m:
+                  active=m.group(2) in targets
+                  if active: out.append('\n'+line)
+                  continue
+              if active:
+                  if re.match(r'^\[\d+\] ',line):
+                      active=False
+                  else:
+                      out.append(line)
+          Path('analysis/selected-btf-layouts.txt').write_text('\n'.join(out)+'\n')
+          print('\n'.join(out[:220]))
+          PY
+
+      - name: Compare exact P0 fingerprint against shared pa3q profile
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 \
+            https://raw.githubusercontent.com/BuSung-dev/Root-My-Galaxy-Payloads/main/src/targets/pa3q-S938NKSUACZF1/p0_fingerprint.h \
+            -o analysis/p0-pa3q.h
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          def vals(path):
+              t=Path(path).read_text()
+              rows=[]
+              for m in re.finditer(r'\{\s*(0x[0-9a-fA-F]+)ULL,\s*\{(.*?)\}\s*\}',t,re.S):
+                  slide=int(m.group(1),16)
+                  words=[int(x,16) for x in re.findall(r'0x([0-9a-fA-F]+)ULL',m.group(2))]
+                  rows.append((slide,words))
+              return dict(rows)
+          a=vals('inputs/p0_fingerprint.h'); b=vals('analysis/p0-pa3q.h')
+          diffs=[]
+          for s in sorted(set(a)&set(b)):
+              for i,(x,y) in enumerate(zip(a[s],b[s])):
+                  if x!=y: diffs.append((s,i,x,y))
+          lines=[f'different_qwords={len(diffs)}']
+          lines += [f'slide=0x{s:06x} word={i} CCZH1=0x{x:016x} pa3q=0x{y:016x}' for s,i,x,y in diffs]
+          Path('analysis/p0-diff-vs-pa3q.txt').write_text('\n'.join(lines)+'\n')
+          print('\n'.join(lines[:100]))
+          PY
+
+      - name: Package analysis
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cp input-sha256.txt analysis/
+          tar -C analysis -czf S931BXXSCCZH1-analysis.tgz .
+          ls -lh S931BXXSCCZH1-analysis.tgz analysis/* | head -80
+
+      - name: Upload CCZH1 analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: S931BXXSCCZH1-profile-analysis
+          path: |
+            analysis/
+            S931BXXSCCZH1-analysis.tgz
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 7

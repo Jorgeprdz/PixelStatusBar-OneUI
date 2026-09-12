@@ -43,19 +43,17 @@ public final class MainActivity extends Activity {
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
 
-        TextView sub = text("v0.8 · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
+        TextView sub = text("v0.9 SAFE · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
         sub.setAlpha(.70f);
         sub.setPadding(0, dp(6), 0, dp(28));
         root.addView(sub);
 
         masterSwitch = new Switch(this);
-        masterSwitch.setText("Iconos Pixel 11");
+        masterSwitch.setText("Señal móvil Pixel");
         masterSwitch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
         masterSwitch.setMinHeight(dp(56));
         masterSwitch.setSplitTrack(false);
 
-        // One UI's inherited switch tint can become black-on-black after the FRRO is enabled.
-        // Pin only this app's switch colors so ON always remains visible.
         int[][] switchStates = new int[][] {
                 new int[] { android.R.attr.state_checked },
                 new int[] { -android.R.attr.state_checked }
@@ -75,9 +73,10 @@ public final class MainActivity extends Activity {
         root.addView(statusText);
 
         TextView safety = text(
-                "v0.8 añade señal + Wi‑Fi 5/6/6E/7 y ajusta batería/reloj con recursos temporales. "
+                "v0.9 SAFE sólo modifica la señal móvil que ya funcionó estable en v0.7. "
+                        + "Wi‑Fi, batería, reloj, layouts y dimensiones quedan totalmente Samsung. "
                         + "No toca /system, boot, vbmeta, SystemUI.apk, service.d ni LSPosed. "
-                        + "Al reiniciar se elimina el FRRO de shell.",
+                        + "El FRRO de shell desaparece al reiniciar.",
                 14, false);
         safety.setAlpha(.72f);
         root.addView(safety);
@@ -85,7 +84,7 @@ public final class MainActivity extends Activity {
         masterSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
             if (updating) return;
             masterSwitch.setEnabled(false);
-            statusText.setText(checked ? "Aplicando Pixel a la barra de estado…" : "Restaurando Samsung…");
+            statusText.setText(checked ? "Aplicando sólo señal móvil…" : "Restaurando Samsung…");
             worker.execute(() -> {
                 RootOverlayController.Result r = checked
                         ? RootOverlayController.enable(this)
@@ -111,7 +110,7 @@ public final class MainActivity extends Activity {
                 updating = true;
                 masterSwitch.setChecked(on);
                 updating = false;
-                statusText.setText(on ? "ON · Pixel Status Bar activo" : "OFF · One UI original");
+                statusText.setText(on ? "ON · sólo señal móvil activa" : "OFF · One UI original");
                 masterSwitch.setEnabled(true);
             });
         });

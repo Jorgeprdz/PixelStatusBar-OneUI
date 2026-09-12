@@ -35,9 +35,7 @@ final class RootOverlayController {
             Result root = requireRoot();
             if (!root.ok) return root;
 
-            // v0.10 combined Wi-Fi overlay must never coexist with v0.11 split tests.
             if (WIFI_BASE.equals(element) || WIFI6.equals(element)) disableOldWifi();
-
             disableOverlay(overlay);
 
             String apk = shellQuote(context.getApplicationInfo().sourceDir);
@@ -83,7 +81,6 @@ final class RootOverlayController {
                 return new Result(false, label(element) + ": no quedó activo; se restauró Samsung.");
             }
 
-            // Strict watchdog: even ONE SystemUI restart counts as unstable.
             Thread.sleep(1800);
             String pid1 = systemUiPid();
             Thread.sleep(4200);
@@ -119,6 +116,22 @@ final class RootOverlayController {
         return off
                 ? new Result(true, label(element) + ": OFF · Samsung restaurado.")
                 : new Result(false, label(element) + ": no pude desactivar el FRRO.");
+    }
+
+    static Result restoreAll() {
+        Result root = requireRoot();
+        if (!root.ok) return root;
+        String[] elements = {MOBILE, WIFI_BASE, WIFI6, BATTERY, CLOCK};
+        for (String element : elements) {
+            disableOverlay(overlayFor(element));
+            writeState(element, "OFF");
+        }
+        disableOldWifi();
+        su("for n in PSWifi0 PSWifi1 PSWifi2 PSWifi3 PSWifi4 PSMobile4_0 PSMobile4_1 PSMobile4_2 PSMobile4_3 PSMobile4_4 PSMobile5_0 PSMobile5_1 PSMobile5_2 PSMobile5_3 PSMobile5_4 PSMobile5_5 PixelStatus; do cmd overlay disable --user 0 \"com.android.shell:$n\" >/dev/null 2>&1 || true; done");
+        for (String element : elements) {
+            if (isEnabled(element)) return new Result(false, "No pude restaurar todos los elementos.");
+        }
+        return new Result(true, "TODO RESTAURADO · barra original de Samsung activa.");
     }
 
     static boolean isEnabled(String element) {

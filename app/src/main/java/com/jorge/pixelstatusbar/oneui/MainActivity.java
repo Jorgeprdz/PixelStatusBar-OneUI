@@ -47,14 +47,14 @@ public final class MainActivity extends Activity {
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
 
-        TextView sub = text("v0.12 · One UI 8.5 · S25 · root temporal", 15, false);
+        TextView sub = text("v0.13 · One UI 8.5 · S25 · root temporal", 15, false);
         sub.setAlpha(.70f);
         sub.setPadding(0, dp(6), 0, dp(22));
         root.addView(sub);
 
         TextView intro = text(
-                "Señal y reloj conservan la ruta estable. Wi‑Fi ahora se crea desde cero en cada ON y se desregistra por completo en OFF. "
-                        + "Cada elemento mantiene watchdog independiente.",
+                "Watchdog v2: tolera una sola recarga de SystemUI y revierte únicamente si detecta inestabilidad real. "
+                        + "Wi‑Fi barre FRRO antiguos antes de cada ON y crea una identidad nueva.",
                 14, false);
         intro.setAlpha(.75f);
         intro.setPadding(0, 0, 0, dp(18));
@@ -138,8 +138,8 @@ public final class MainActivity extends Activity {
         if (status != null) {
             status.setText(checked
                     ? (RootOverlayController.WIFI_BASE.equals(key) || RootOverlayController.WIFI6.equals(key)
-                        ? "LIMPIANDO FRRO anterior… después PROBANDO…"
-                        : "PROBANDO… watchdog armado")
+                        ? "LIMPIANDO FRRO antiguos… después PROBANDO…"
+                        : "PROBANDO… watchdog v2 armado")
                     : "Restaurando Samsung y limpiando FRRO…");
         }
 

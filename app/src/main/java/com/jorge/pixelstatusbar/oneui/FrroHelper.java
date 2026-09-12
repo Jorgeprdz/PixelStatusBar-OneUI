@@ -18,13 +18,12 @@ public final class FrroHelper {
     private static final String NAME = "PixelStatusNative";
     private static final String TARGET = "com.android.systemui";
 
-    // Existing AOSP/Pixel-style connectivity drawables already shipped inside this exact SystemUI.
     private static final int[] WIFI_REFS = {
             0x7e080e33, // ic_wifi_0
             0x7e080e35, // ic_wifi_1
             0x7e080e37, // ic_wifi_2
             0x7e080e39, // ic_wifi_3
-            0x7e080e39  // strongest state uses ic_wifi_3
+            0x7e080e39  // strongest state
     };
 
     private static final int[] MOBILE4_REFS = {
@@ -35,8 +34,7 @@ public final class FrroHelper {
             0x7e080c22, 0x7e080c26, 0x7e080c2a, 0x7e080c2e, 0x7e080c32, 0x7e080c34
     };
 
-    // Samsung chooses a different stat_sys family depending on the negotiated Wi-Fi generation.
-    // Cover all normal families so Wi-Fi 5/6/6E/7 cannot fall back to the Samsung glyph/badge.
+    // Samsung selects a different drawable family according to Wi-Fi generation.
     private static final String[] WIFI_PREFIXES = {
             "stat_sys_wifi_signal_",
             "stat_sys_wifi5_signal_",
@@ -78,7 +76,7 @@ public final class FrroHelper {
             setTargetOverlayable.setAccessible(true);
             setTargetOverlayable.invoke(overlay, new Object[]{null});
         } catch (NoSuchMethodException ignored) {
-            // Samsung's FRRO for SystemUI also has a blank targetOverlayableName.
+            // Samsung's own SystemUI FRRO also uses a blank targetOverlayableName.
         }
 
         Field internalField = foClass.getDeclaredField("mOverlay");
@@ -104,7 +102,7 @@ public final class FrroHelper {
         Field data = entryClass.getField("data");
         Field configuration = entryClass.getField("configuration");
 
-        // Wi-Fi: normal plus Wi-Fi 5/6/6E/7 status families -> Pixel/AOSP segmented Wi-Fi.
+        // Wi-Fi 4/5/6/6E/7 -> same Pixel/AOSP glyph family, removing Samsung's generation badge.
         for (String prefix : WIFI_PREFIXES) {
             for (int level = 0; level <= 4; level++) {
                 addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
@@ -113,7 +111,7 @@ public final class FrroHelper {
             }
         }
 
-        // Mobile signal: already proven on this S25 in v0.7.
+        // Mobile signal (already proven working on this exact S25 in v0.7).
         for (int level = 0; level <= 4; level++) {
             addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
                     TARGET + ":drawable/stat_sys_signal_" + level,
@@ -125,34 +123,34 @@ public final class FrroHelper {
                     0x01, MOBILE5_REFS[level]);
         }
 
-        // Pixel/AOSP current status-bar metrics. These are scalar FRRO entries only; no layout APK
-        // replacement. Battery remains Samsung's live level renderer but gets Pixel unified proportions.
+        // Pixel/AOSP status bar metrics. These remain scalar temporary resource overrides;
+        // Samsung's live battery renderer/tint logic stays intact.
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
                 "status_bar_wifi_signal_size", 15f, 2); // sp
 
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_chip_width", 20.6f, 2); // sp
+                "status_bar_battery_chip_width", 20.6f, 2);
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_chip_height", 12f, 2); // sp
+                "status_bar_battery_chip_height", 12f, 2);
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_chip_radius", 6f, 2); // sp
+                "status_bar_battery_chip_radius", 6f, 2);
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_unified_icon_width", 20.6f, 2); // sp
+                "status_bar_battery_unified_icon_width", 20.6f, 2);
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_battery_unified_icon_height", 12f, 2); // sp
+                "status_bar_battery_unified_icon_height", 12f, 2);
 
-        // Pixel clock: AOSP uses 14sp and compact 4dp start padding. Samsung's layout already uses
-        // weight 600, so this changes only safe resource-backed metrics.
+        // Pixel clock metrics. Samsung hardcodes fontFamily="sec" in status_bar.xml, so we do not
+        // replace that layout; size/padding are safe resource-backed overrides.
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_clock_size", 14f, 2); // sp
+                "status_bar_clock_size", 14f, 2);
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "sec_status_bar_clock_size", 14f, 2); // sp
+                "sec_status_bar_clock_size", 14f, 2);
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
                 "status_bar_clock_starting_padding", 4f, 1); // dp
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_clock_end_padding", 0f, 1); // dp
+                "status_bar_clock_end_padding", 0f, 1);
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                "status_bar_left_clock_starting_padding", 0f, 1); // dp
+                "status_bar_left_clock_starting_padding", 0f, 1);
         addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
                 "status_bar_left_clock_end_padding", 2f, 2); // sp
 
@@ -188,7 +186,7 @@ public final class FrroHelper {
             String name, float value, int unit) throws Exception {
         addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
                 TARGET + ":dimen/" + name,
-                0x05, complexDimension(value, unit)); // Res_value::TYPE_DIMENSION
+                0x05, createComplexDimension(value, unit)); // Res_value::TYPE_DIMENSION
     }
 
     private static void addEntry(List entries, Constructor<?> entryCtor,
@@ -202,13 +200,12 @@ public final class FrroHelper {
         entries.add(entry);
     }
 
-    /**
-     * Encode a positive Android complex dimension with 1/256 precision.
-     * unit: 1=dp, 2=sp. Radix 23p8 is plenty for status-bar dimensions.
-     */
-    private static int complexDimension(float value, int unit) {
-        int mantissa = Math.round(value * 256f);
-        return (mantissa << 8) | (2 << 4) | (unit & 0xf);
+    // Use Android's own encoder instead of duplicating the packed-complex format.
+    private static int createComplexDimension(float value, int unit) throws Exception {
+        Class<?> tv = Class.forName("android.util.TypedValue");
+        Method m = tv.getDeclaredMethod("createComplexDimension", float.class, int.class);
+        m.setAccessible(true);
+        return (Integer) m.invoke(null, value, unit);
     }
 
     private static void exemptHiddenApis() {

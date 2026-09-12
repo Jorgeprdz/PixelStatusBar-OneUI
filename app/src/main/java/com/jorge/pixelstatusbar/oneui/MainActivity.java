@@ -39,7 +39,7 @@ public final class MainActivity extends Activity {
 
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
-        TextView sub = text("One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
+        TextView sub = text("v0.4 · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
         sub.setAlpha(.70f); sub.setPadding(0, dp(6), 0, dp(28)); root.addView(sub);
 
         masterSwitch = new Switch(this);
@@ -51,7 +51,7 @@ public final class MainActivity extends Activity {
         statusText = text("Comprobando…", 16, false);
         statusText.setPadding(0, dp(18), 0, dp(28)); root.addView(statusText);
 
-        TextView safety = text("ON usa root sólo para crear un overlay temporal de recursos. No toca /system, boot, vbmeta, SystemUI.apk ni service.d. OFF desactiva el overlay. Si reinicias, Android elimina este overlay de shell durante el arranque.", 14, false);
+        TextView safety = text("ON usa root sólo para crear FRRO temporales. No toca /system, boot, vbmeta, SystemUI.apk ni service.d. Si algo falla, desactiva todo y deja Samsung intacto.", 14, false);
         safety.setAlpha(.72f); root.addView(safety);
 
         masterSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
@@ -79,7 +79,7 @@ public final class MainActivity extends Activity {
             boolean on = RootOverlayController.isEnabled();
             runOnUiThread(() -> {
                 updating = true; masterSwitch.setChecked(on); updating = false;
-                statusText.setText(on ? "ON · overlay temporal activo" : "OFF · One UI original");
+                statusText.setText(on ? "ON · FRRO temporales activos" : "OFF · One UI original");
                 masterSwitch.setEnabled(true);
             });
         });

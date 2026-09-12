@@ -47,14 +47,14 @@ public final class MainActivity extends Activity {
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
 
-        TextView sub = text("v0.11 MODULAR · One UI 8.5 · S25 · root temporal", 15, false);
+        TextView sub = text("v0.12 · One UI 8.5 · S25 · root temporal", 15, false);
         sub.setAlpha(.70f);
         sub.setPadding(0, dp(6), 0, dp(22));
         root.addView(sub);
 
         TextView intro = text(
-                "Cada elemento vive en su propio FRRO y tiene watchdog independiente. "
-                        + "Si SystemUI reinicia una sola vez durante una prueba, sólo ese elemento se auto-revierte.",
+                "Señal y reloj conservan la ruta estable. Wi‑Fi ahora se crea desde cero en cada ON y se desregistra por completo en OFF. "
+                        + "Cada elemento mantiene watchdog independiente.",
                 14, false);
         intro.setAlpha(.75f);
         intro.setPadding(0, 0, 0, dp(18));
@@ -64,7 +64,7 @@ public final class MainActivity extends Activity {
         addElement(root, RootOverlayController.WIFI_BASE, "Wi‑Fi Pixel · base", true);
         addElement(root, RootOverlayController.WIFI6, "Wi‑Fi Pixel · badge Wi‑Fi 6", true);
         addElement(root, RootOverlayController.BATTERY, "Batería Pixel", true);
-        addElement(root, RootOverlayController.CLOCK, "Reloj Pixel", true);
+        addElement(root, RootOverlayController.CLOCK, "Reloj Pixel", false);
 
         Button restoreAll = new Button(this);
         restoreAll.setText("Restaurar todo Samsung");
@@ -79,7 +79,7 @@ public final class MainActivity extends Activity {
             setAllSwitchesEnabled(false);
             restoreAll.setEnabled(false);
             worker.execute(() -> {
-                RootOverlayController.Result r = RootOverlayController.restoreAll();
+                RootOverlayController.Result r = RootOverlayController.restoreAll(this);
                 runOnUiThread(() -> {
                     refreshUiStates();
                     restoreAll.setText(r.ok ? "Todo Samsung restaurado" : r.message);
@@ -90,9 +90,8 @@ public final class MainActivity extends Activity {
         });
 
         TextView safety = text(
-                "Antes de desinstalar, usa ‘Restaurar todo Samsung’. Desinstalar la app por sí sola no garantiza "
-                        + "apagar FRRO registrados por com.android.shell. No toca /system, boot, vbmeta, SystemUI.apk, "
-                        + "service.d ni LSPosed. Todos los overlays temporales desaparecen al reiniciar.",
+                "Antes de desinstalar, usa ‘Restaurar todo Samsung’. Los FRRO pertenecen a com.android.shell, no a la APK. "
+                        + "No toca /system, boot, vbmeta, SystemUI.apk, service.d ni LSPosed.",
                 13, false);
         safety.setAlpha(.65f);
         safety.setPadding(0, dp(12), 0, 0);
@@ -136,12 +135,18 @@ public final class MainActivity extends Activity {
         if (updating) return;
         setAllSwitchesEnabled(false);
         TextView status = statuses.get(key);
-        if (status != null) status.setText(checked ? "PROBANDO… watchdog armado" : "Restaurando Samsung…");
+        if (status != null) {
+            status.setText(checked
+                    ? (RootOverlayController.WIFI_BASE.equals(key) || RootOverlayController.WIFI6.equals(key)
+                        ? "LIMPIANDO FRRO anterior… después PROBANDO…"
+                        : "PROBANDO… watchdog armado")
+                    : "Restaurando Samsung y limpiando FRRO…");
+        }
 
         worker.execute(() -> {
             RootOverlayController.Result r = checked
                     ? RootOverlayController.enable(this, key)
-                    : RootOverlayController.disable(key);
+                    : RootOverlayController.disable(this, key);
             runOnUiThread(() -> {
                 if (status != null) status.setText(r.message);
                 refreshUiStates();
@@ -153,7 +158,7 @@ public final class MainActivity extends Activity {
     private void refreshAsync(boolean cleanupOldWifi) {
         setAllSwitchesEnabled(false);
         worker.execute(() -> {
-            if (cleanupOldWifi) RootOverlayController.cleanupObsoleteWifi();
+            if (cleanupOldWifi) RootOverlayController.cleanupObsoleteWifi(this);
             runOnUiThread(() -> {
                 refreshUiStates();
                 setAllSwitchesEnabled(true);

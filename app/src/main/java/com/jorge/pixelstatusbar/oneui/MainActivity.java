@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -65,9 +66,33 @@ public final class MainActivity extends Activity {
         addElement(root, RootOverlayController.BATTERY, "Batería Pixel", true);
         addElement(root, RootOverlayController.CLOCK, "Reloj Pixel", true);
 
+        Button restoreAll = new Button(this);
+        restoreAll.setText("Restaurar todo Samsung");
+        restoreAll.setAllCaps(false);
+        restoreAll.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        restoreAll.setPadding(dp(12), dp(12), dp(12), dp(12));
+        LinearLayout.LayoutParams restoreParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        restoreParams.setMargins(0, dp(18), 0, dp(8));
+        root.addView(restoreAll, restoreParams);
+        restoreAll.setOnClickListener(v -> {
+            setAllSwitchesEnabled(false);
+            restoreAll.setEnabled(false);
+            worker.execute(() -> {
+                RootOverlayController.Result r = RootOverlayController.restoreAll();
+                runOnUiThread(() -> {
+                    refreshUiStates();
+                    restoreAll.setText(r.ok ? "Todo Samsung restaurado" : r.message);
+                    restoreAll.setEnabled(true);
+                    setAllSwitchesEnabled(true);
+                });
+            });
+        });
+
         TextView safety = text(
-                "No toca /system, boot, vbmeta, SystemUI.apk, service.d ni LSPosed. "
-                        + "Todos los overlays son temporales de com.android.shell y desaparecen al reiniciar.",
+                "Antes de desinstalar, usa ‘Restaurar todo Samsung’. Desinstalar la app por sí sola no garantiza "
+                        + "apagar FRRO registrados por com.android.shell. No toca /system, boot, vbmeta, SystemUI.apk, "
+                        + "service.d ni LSPosed. Todos los overlays temporales desaparecen al reiniciar.",
                 13, false);
         safety.setAlpha(.65f);
         safety.setPadding(0, dp(12), 0, 0);

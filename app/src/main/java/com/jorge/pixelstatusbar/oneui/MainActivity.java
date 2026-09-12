@@ -8,161 +8,163 @@ import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.ViewGroup;
+import android.widget.CompoundButton;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-
-    private Switch mobileSwitch;
-    private Switch wifiSwitch;
-    private TextView mobileStatus;
-    private TextView wifiStatus;
-    private boolean updatingMobile;
-    private boolean updatingWifi;
+    private final Map<String, Switch> switches = new LinkedHashMap<>();
+    private final Map<String, TextView> statuses = new LinkedHashMap<>();
+    private boolean updating;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildUi());
-        refreshAsync();
+        refreshAsync(true);
     }
 
-    @Override protected void onResume() { super.onResume(); refreshAsync(); }
+    @Override protected void onResume() { super.onResume(); refreshAsync(false); }
     @Override protected void onDestroy() { worker.shutdownNow(); super.onDestroy(); }
 
-    private LinearLayout buildUi() {
-        int p = dp(24);
+    private ScrollView buildUi() {
+        ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER_VERTICAL);
-        root.setPadding(p, p, p, p);
-        root.setLayoutParams(new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.setPadding(dp(24), dp(32), dp(24), dp(40));
+        scroll.addView(root, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
 
-        TextView sub = text("v0.10 SAFE · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
+        TextView sub = text("v0.11 MODULAR · One UI 8.5 · S25 · root temporal", 15, false);
         sub.setAlpha(.70f);
         sub.setPadding(0, dp(6), 0, dp(22));
         root.addView(sub);
 
-        mobileSwitch = makeSwitch("Señal móvil Pixel");
-        root.addView(mobileSwitch, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView intro = text(
+                "Cada elemento vive en su propio FRRO y tiene watchdog independiente. "
+                        + "Si SystemUI reinicia una sola vez durante una prueba, sólo ese elemento se auto-revierte.",
+                14, false);
+        intro.setAlpha(.75f);
+        intro.setPadding(0, 0, 0, dp(18));
+        root.addView(intro);
 
-        mobileStatus = text("Comprobando señal…", 14, false);
-        mobileStatus.setAlpha(.78f);
-        mobileStatus.setPadding(0, dp(4), 0, dp(18));
-        root.addView(mobileStatus);
-
-        wifiSwitch = makeSwitch("Wi‑Fi Pixel · prueba Wi‑Fi 6");
-        root.addView(wifiSwitch, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        wifiStatus = text("Comprobando Wi‑Fi…", 14, false);
-        wifiStatus.setAlpha(.78f);
-        wifiStatus.setPadding(0, dp(4), 0, dp(22));
-        root.addView(wifiStatus);
+        addElement(root, RootOverlayController.MOBILE, "Señal móvil Pixel", false);
+        addElement(root, RootOverlayController.WIFI_BASE, "Wi‑Fi Pixel · base", true);
+        addElement(root, RootOverlayController.WIFI6, "Wi‑Fi Pixel · badge Wi‑Fi 6", true);
+        addElement(root, RootOverlayController.BATTERY, "Batería Pixel", true);
+        addElement(root, RootOverlayController.CLOCK, "Reloj Pixel", true);
 
         TextView safety = text(
-                "v0.10 mantiene la señal móvil estable de v0.9 y prueba Wi‑Fi en un FRRO completamente separado. "
-                        + "Wi‑Fi tiene watchdog: si SystemUI no permanece estable, se apaga solo. "
-                        + "Batería, reloj, layouts y dimensiones no se tocan. "
-                        + "No escribe /system ni instala nada al arranque.",
-                14, false);
-        safety.setAlpha(.72f);
+                "No toca /system, boot, vbmeta, SystemUI.apk, service.d ni LSPosed. "
+                        + "Todos los overlays son temporales de com.android.shell y desaparecen al reiniciar.",
+                13, false);
+        safety.setAlpha(.65f);
+        safety.setPadding(0, dp(12), 0, 0);
         root.addView(safety);
 
-        mobileSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
-            if (updatingMobile) return;
-            mobileSwitch.setEnabled(false);
-            mobileStatus.setText(checked ? "Aplicando señal móvil…" : "Restaurando señal Samsung…");
-            worker.execute(() -> {
-                RootOverlayController.Result r = checked
-                        ? RootOverlayController.enableMobile(this)
-                        : RootOverlayController.disableMobileResult();
-                runOnUiThread(() -> {
-                    mobileStatus.setText(r.message);
-                    updatingMobile = true;
-                    mobileSwitch.setChecked(RootOverlayController.isMobileEnabled());
-                    updatingMobile = false;
-                    mobileSwitch.setEnabled(true);
-                });
-            });
-        });
-
-        wifiSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
-            if (updatingWifi) return;
-            wifiSwitch.setEnabled(false);
-            wifiStatus.setText(checked
-                    ? "Probando Wi‑Fi… watchdog armado durante 15 s"
-                    : "Restaurando Wi‑Fi Samsung…");
-            worker.execute(() -> {
-                RootOverlayController.Result r = checked
-                        ? RootOverlayController.enableWifi(this)
-                        : RootOverlayController.disableWifiResult();
-                runOnUiThread(() -> {
-                    wifiStatus.setText(r.message);
-                    updatingWifi = true;
-                    wifiSwitch.setChecked(RootOverlayController.isWifiEnabled());
-                    updatingWifi = false;
-                    wifiSwitch.setEnabled(true);
-                });
-            });
-        });
-
-        return root;
+        return scroll;
     }
 
-    private Switch makeSwitch(String label) {
-        Switch s = new Switch(this);
-        s.setText(label);
-        s.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
-        s.setMinHeight(dp(54));
-        s.setSplitTrack(false);
+    private void addElement(LinearLayout root, String key, String label, boolean experimental) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(8), 0, 0);
 
+        LinearLayout textCol = new LinearLayout(this);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+
+        TextView labelView = text(label + (experimental ? "  ·  EXP" : ""), 18, false);
+        textCol.addView(labelView);
+
+        TextView status = text("Comprobando…", 14, false);
+        status.setAlpha(.68f);
+        status.setPadding(0, dp(4), 0, dp(8));
+        textCol.addView(status);
+        statuses.put(key, status);
+
+        Switch sw = new Switch(this);
+        sw.setSplitTrack(false);
+        tintSwitch(sw);
+        switches.put(key, sw);
+
+        LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        row.addView(textCol, textParams);
+        row.addView(sw, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        sw.setOnCheckedChangeListener((buttonView, checked) -> onSwitchChanged(key, checked));
+    }
+
+    private void onSwitchChanged(String key, boolean checked) {
+        if (updating) return;
+        setAllSwitchesEnabled(false);
+        TextView status = statuses.get(key);
+        if (status != null) status.setText(checked ? "PROBANDO… watchdog armado" : "Restaurando Samsung…");
+
+        worker.execute(() -> {
+            RootOverlayController.Result r = checked
+                    ? RootOverlayController.enable(this, key)
+                    : RootOverlayController.disable(key);
+            runOnUiThread(() -> {
+                if (status != null) status.setText(r.message);
+                refreshUiStates();
+                setAllSwitchesEnabled(true);
+            });
+        });
+    }
+
+    private void refreshAsync(boolean cleanupOldWifi) {
+        setAllSwitchesEnabled(false);
+        worker.execute(() -> {
+            if (cleanupOldWifi) RootOverlayController.cleanupObsoleteWifi();
+            runOnUiThread(() -> {
+                refreshUiStates();
+                setAllSwitchesEnabled(true);
+            });
+        });
+    }
+
+    private void refreshUiStates() {
+        updating = true;
+        for (String key : switches.keySet()) {
+            boolean on = RootOverlayController.isEnabled(key);
+            Switch sw = switches.get(key);
+            if (sw != null) sw.setChecked(on);
+            TextView status = statuses.get(key);
+            if (status != null) {
+                String state = RootOverlayController.state(key);
+                if ("ESTABLE".equals(state)) status.setText("ESTABLE · ON");
+                else if ("AUTO-REVERTIDO".equals(state)) status.setText("AUTO-REVERTIDO · Samsung restaurado");
+                else if (on) status.setText("ON · activo");
+                else status.setText("OFF · Samsung");
+            }
+        }
+        updating = false;
+    }
+
+    private void setAllSwitchesEnabled(boolean enabled) {
+        for (CompoundButton sw : switches.values()) sw.setEnabled(enabled);
+    }
+
+    private void tintSwitch(Switch sw) {
         int[][] states = new int[][] {
                 new int[] { android.R.attr.state_checked },
                 new int[] { -android.R.attr.state_checked }
         };
-        s.setThumbTintList(new ColorStateList(states,
-                new int[] { Color.WHITE, 0xffe3e3e3 }));
-        s.setTrackTintList(new ColorStateList(states,
-                new int[] { 0xff8ab4f8, 0xff5f6368 }));
-        return s;
-    }
-
-    private void refreshAsync() {
-        if (mobileSwitch == null || wifiSwitch == null) return;
-        mobileSwitch.setEnabled(false);
-        wifiSwitch.setEnabled(false);
-        worker.execute(() -> {
-            boolean mobileOn = RootOverlayController.isMobileEnabled();
-            boolean wifiOn = RootOverlayController.isWifiEnabled();
-            runOnUiThread(() -> {
-                updatingMobile = true;
-                mobileSwitch.setChecked(mobileOn);
-                updatingMobile = false;
-                updatingWifi = true;
-                wifiSwitch.setChecked(wifiOn);
-                updatingWifi = false;
-
-                mobileStatus.setText(mobileOn
-                        ? "ON · señal móvil Pixel activa"
-                        : "OFF · señal móvil Samsung");
-                wifiStatus.setText(wifiOn
-                        ? "ON · Wi‑Fi Pixel activo"
-                        : "OFF · Wi‑Fi Samsung");
-                mobileSwitch.setEnabled(true);
-                wifiSwitch.setEnabled(true);
-            });
-        });
+        sw.setThumbTintList(new ColorStateList(states, new int[] { Color.WHITE, 0xffe3e3e3 }));
+        sw.setTrackTintList(new ColorStateList(states, new int[] { 0xff8ab4f8, 0xff5f6368 }));
     }
 
     private TextView text(String value, int sp, boolean bold) {

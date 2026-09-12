@@ -72,7 +72,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cczh1-out"
           printf '%s\n' "$VERSION" > "$RUNNER_TEMP/cczh1-out/firmware-version.txt"
 
-      - name: Download and decrypt official firmware on the fly
+      - name: Download and decrypt official firmware
         shell: bash
         run: |
           set -euxo pipefail
@@ -86,7 +86,7 @@ jobs:
           ls -lh "$RUNNER_TEMP/S931BXXSCCZH1-firmware.zip"
           df -h /
 
-      - name: Stream-extract boot.img.lz4 and sboot.bin.lz4 only
+      - name: Stream-extract boot and vendor_boot
         shell: bash
         run: |
           set -euxo pipefail
@@ -110,37 +110,45 @@ jobs:
                   raise RuntimeError(f'No {prefix}*.tar.md5 entry found in firmware ZIP')
               return hits[0]
 
-          def extract_nested_tar_member(zf, zip_entry, wanted, dest):
+          def extract_members(zf, zip_entry, wanted):
+              wanted = set(wanted)
+              found = set()
+              member_names = []
               print(f'Opening {zip_entry}')
               with zf.open(zip_entry, 'r') as stream:
                   with tarfile.open(fileobj=stream, mode='r|*') as tf:
                       for member in tf:
-                          if Path(member.name).name != wanted:
+                          base = Path(member.name).name
+                          member_names.append(member.name)
+                          if base not in wanted:
                               continue
                           src = tf.extractfile(member)
                           if src is None:
-                              raise RuntimeError(f'{wanted} exists but is not a regular file')
+                              raise RuntimeError(f'{base} exists but is not a regular file')
+                          dest = out / base
                           with open(dest, 'wb') as dst:
                               shutil.copyfileobj(src, dst, length=8 * 1024 * 1024)
-                          print(f'Extracted {wanted}: {Path(dest).stat().st_size} bytes')
-                          return
-              raise RuntimeError(f'{wanted} not found inside {zip_entry}')
+                          found.add(base)
+                          print(f'Extracted {base}: {dest.stat().st_size} bytes')
+              (out / 'ap-tar-contents.txt').write_text('\n'.join(member_names) + '\n')
+              missing = wanted - found
+              if missing:
+                  raise RuntimeError(f'Missing AP members: {sorted(missing)}')
 
           with zipfile.ZipFile(fw, 'r') as zf:
               names = zf.namelist()
               (out / 'firmware-zip-contents.txt').write_text('\n'.join(names) + '\n')
               ap = pick(names, 'AP_')
-              bl = pick(names, 'BL_')
-              (out / 'selected-packages.txt').write_text(f'AP={ap}\nBL={bl}\n')
-              extract_nested_tar_member(zf, ap, 'boot.img.lz4', out / 'boot.img.lz4')
-              extract_nested_tar_member(zf, bl, 'sboot.bin.lz4', out / 'sboot.bin.lz4')
+              (out / 'selected-packages.txt').write_text(f'AP={ap}\n')
+              extract_members(zf, ap, ['boot.img.lz4', 'vendor_boot.img.lz4'])
 
-          for p in [out / 'boot.img.lz4', out / 'sboot.bin.lz4']:
-              h = hashlib.sha256()
-              with open(p, 'rb') as f:
-                  for chunk in iter(lambda: f.read(8 * 1024 * 1024), b''):
-                      h.update(chunk)
-              with open(out / 'SHA256SUMS', 'a') as sums:
+          sums_path = out / 'SHA256SUMS'
+          with open(sums_path, 'w') as sums:
+              for p in [out / 'boot.img.lz4', out / 'vendor_boot.img.lz4']:
+                  h = hashlib.sha256()
+                  with open(p, 'rb') as f:
+                      for chunk in iter(lambda: f.read(8 * 1024 * 1024), b''):
+                          h.update(chunk)
                   sums.write(f'{h.hexdigest()}  {p.name}\n')
           PY
           ls -lh "$RUNNER_TEMP/cczh1-out"
@@ -153,6 +161,7 @@ jobs:
           df -h / || true
 
       - name: Upload exact CCZH1 inputs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: S931BXXSCCZH1-kernel-inputs

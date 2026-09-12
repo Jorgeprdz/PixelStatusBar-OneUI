@@ -17,9 +17,13 @@ import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private Switch masterSwitch;
-    private TextView statusText;
-    private boolean updating;
+
+    private Switch mobileSwitch;
+    private Switch wifiSwitch;
+    private TextView mobileStatus;
+    private TextView wifiStatus;
+    private boolean updatingMobile;
+    private boolean updatingWifi;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,75 +47,120 @@ public final class MainActivity extends Activity {
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
 
-        TextView sub = text("v0.9 SAFE · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
+        TextView sub = text("v0.10 SAFE · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
         sub.setAlpha(.70f);
-        sub.setPadding(0, dp(6), 0, dp(28));
+        sub.setPadding(0, dp(6), 0, dp(22));
         root.addView(sub);
 
-        masterSwitch = new Switch(this);
-        masterSwitch.setText("Señal móvil Pixel");
-        masterSwitch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
-        masterSwitch.setMinHeight(dp(56));
-        masterSwitch.setSplitTrack(false);
-
-        int[][] switchStates = new int[][] {
-                new int[] { android.R.attr.state_checked },
-                new int[] { -android.R.attr.state_checked }
-        };
-        masterSwitch.setThumbTintList(new ColorStateList(
-                switchStates,
-                new int[] { Color.WHITE, 0xffe3e3e3 }));
-        masterSwitch.setTrackTintList(new ColorStateList(
-                switchStates,
-                new int[] { 0xff8ab4f8, 0xff5f6368 }));
-
-        root.addView(masterSwitch, new LinearLayout.LayoutParams(
+        mobileSwitch = makeSwitch("Señal móvil Pixel");
+        root.addView(mobileSwitch, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        statusText = text("Comprobando…", 16, false);
-        statusText.setPadding(0, dp(18), 0, dp(28));
-        root.addView(statusText);
+        mobileStatus = text("Comprobando señal…", 14, false);
+        mobileStatus.setAlpha(.78f);
+        mobileStatus.setPadding(0, dp(4), 0, dp(18));
+        root.addView(mobileStatus);
+
+        wifiSwitch = makeSwitch("Wi‑Fi Pixel · prueba Wi‑Fi 6");
+        root.addView(wifiSwitch, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        wifiStatus = text("Comprobando Wi‑Fi…", 14, false);
+        wifiStatus.setAlpha(.78f);
+        wifiStatus.setPadding(0, dp(4), 0, dp(22));
+        root.addView(wifiStatus);
 
         TextView safety = text(
-                "v0.9 SAFE sólo modifica la señal móvil que ya funcionó estable en v0.7. "
-                        + "Wi‑Fi, batería, reloj, layouts y dimensiones quedan totalmente Samsung. "
-                        + "No toca /system, boot, vbmeta, SystemUI.apk, service.d ni LSPosed. "
-                        + "El FRRO de shell desaparece al reiniciar.",
+                "v0.10 mantiene la señal móvil estable de v0.9 y prueba Wi‑Fi en un FRRO completamente separado. "
+                        + "Wi‑Fi tiene watchdog: si SystemUI no permanece estable, se apaga solo. "
+                        + "Batería, reloj, layouts y dimensiones no se tocan. "
+                        + "No escribe /system ni instala nada al arranque.",
                 14, false);
         safety.setAlpha(.72f);
         root.addView(safety);
 
-        masterSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
-            if (updating) return;
-            masterSwitch.setEnabled(false);
-            statusText.setText(checked ? "Aplicando sólo señal móvil…" : "Restaurando Samsung…");
+        mobileSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
+            if (updatingMobile) return;
+            mobileSwitch.setEnabled(false);
+            mobileStatus.setText(checked ? "Aplicando señal móvil…" : "Restaurando señal Samsung…");
             worker.execute(() -> {
                 RootOverlayController.Result r = checked
-                        ? RootOverlayController.enable(this)
-                        : RootOverlayController.disable();
+                        ? RootOverlayController.enableMobile(this)
+                        : RootOverlayController.disableMobileResult();
                 runOnUiThread(() -> {
-                    statusText.setText(r.message);
-                    updating = true;
-                    masterSwitch.setChecked(r.ok ? checked : RootOverlayController.isEnabled());
-                    updating = false;
-                    masterSwitch.setEnabled(true);
+                    mobileStatus.setText(r.message);
+                    updatingMobile = true;
+                    mobileSwitch.setChecked(RootOverlayController.isMobileEnabled());
+                    updatingMobile = false;
+                    mobileSwitch.setEnabled(true);
                 });
             });
         });
+
+        wifiSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
+            if (updatingWifi) return;
+            wifiSwitch.setEnabled(false);
+            wifiStatus.setText(checked
+                    ? "Probando Wi‑Fi… watchdog armado durante 15 s"
+                    : "Restaurando Wi‑Fi Samsung…");
+            worker.execute(() -> {
+                RootOverlayController.Result r = checked
+                        ? RootOverlayController.enableWifi(this)
+                        : RootOverlayController.disableWifiResult();
+                runOnUiThread(() -> {
+                    wifiStatus.setText(r.message);
+                    updatingWifi = true;
+                    wifiSwitch.setChecked(RootOverlayController.isWifiEnabled());
+                    updatingWifi = false;
+                    wifiSwitch.setEnabled(true);
+                });
+            });
+        });
+
         return root;
     }
 
+    private Switch makeSwitch(String label) {
+        Switch s = new Switch(this);
+        s.setText(label);
+        s.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
+        s.setMinHeight(dp(54));
+        s.setSplitTrack(false);
+
+        int[][] states = new int[][] {
+                new int[] { android.R.attr.state_checked },
+                new int[] { -android.R.attr.state_checked }
+        };
+        s.setThumbTintList(new ColorStateList(states,
+                new int[] { Color.WHITE, 0xffe3e3e3 }));
+        s.setTrackTintList(new ColorStateList(states,
+                new int[] { 0xff8ab4f8, 0xff5f6368 }));
+        return s;
+    }
+
     private void refreshAsync() {
-        if (masterSwitch == null) return;
-        masterSwitch.setEnabled(false);
+        if (mobileSwitch == null || wifiSwitch == null) return;
+        mobileSwitch.setEnabled(false);
+        wifiSwitch.setEnabled(false);
         worker.execute(() -> {
-            boolean on = RootOverlayController.isEnabled();
+            boolean mobileOn = RootOverlayController.isMobileEnabled();
+            boolean wifiOn = RootOverlayController.isWifiEnabled();
             runOnUiThread(() -> {
-                updating = true;
-                masterSwitch.setChecked(on);
-                updating = false;
-                statusText.setText(on ? "ON · sólo señal móvil activa" : "OFF · One UI original");
-                masterSwitch.setEnabled(true);
+                updatingMobile = true;
+                mobileSwitch.setChecked(mobileOn);
+                updatingMobile = false;
+                updatingWifi = true;
+                wifiSwitch.setChecked(wifiOn);
+                updatingWifi = false;
+
+                mobileStatus.setText(mobileOn
+                        ? "ON · señal móvil Pixel activa"
+                        : "OFF · señal móvil Samsung");
+                wifiStatus.setText(wifiOn
+                        ? "ON · Wi‑Fi Pixel activo"
+                        : "OFF · Wi‑Fi Samsung");
+                mobileSwitch.setEnabled(true);
+                wifiSwitch.setEnabled(true);
             });
         });
     }

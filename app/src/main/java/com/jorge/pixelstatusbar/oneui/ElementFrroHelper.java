@@ -10,8 +10,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * v0.11 modular fabricated overlays. Each element gets its own FRRO so it can
- * be tested, disabled and watchdog-reverted without touching the other ones.
+ * Modular fabricated overlays. Wi-Fi may use a unique simple name per activation,
+ * allowing a full disable + unregister lifecycle instead of reusing stale FRRO state.
  */
 public final class ElementFrroHelper {
     private static final String OWNER = "com.android.shell";
@@ -22,15 +22,21 @@ public final class ElementFrroHelper {
     };
 
     public static void main(String[] args) {
-        if (args.length < 1) {
-            System.err.println("ELEMENT_FRRO_ERROR: missing element");
-            System.exit(2);
-        }
-        String element = args[0];
         try {
             exemptHiddenApis();
-            register(element);
-            System.out.println("REGISTERED " + overlayName(element));
+
+            if (args.length >= 1 && "unregister".equals(args[0])) {
+                if (args.length < 2) throw new IllegalArgumentException("missing overlay simple name");
+                unregister(args[1]);
+                System.out.println("UNREGISTERED " + OWNER + ":" + args[1]);
+                return;
+            }
+
+            if (args.length < 1) throw new IllegalArgumentException("missing element");
+            String element = args[0];
+            String customName = args.length >= 2 ? args[1] : simpleName(element);
+            register(element, customName);
+            System.out.println("REGISTERED " + OWNER + ":" + customName);
         } catch (Throwable t) {
             Throwable root = unwrap(t);
             System.err.println("ELEMENT_FRRO_ERROR: " + root.getClass().getName() + ": " + String.valueOf(root.getMessage()));
@@ -41,9 +47,7 @@ public final class ElementFrroHelper {
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private static void register(String element) throws Exception {
-        String simpleName = simpleName(element);
-
+    private static void register(String element, String simpleName) throws Exception {
         Class<?> foClass = Class.forName("android.content.om.FabricatedOverlay");
         Constructor<?> ctor = foClass.getDeclaredConstructor(String.class, String.class);
         ctor.setAccessible(true);
@@ -107,12 +111,49 @@ public final class ElementFrroHelper {
                 throw new IllegalArgumentException("unknown element: " + element);
         }
 
-        Class<?> txBuilderClass = Class.forName("android.content.om.OverlayManagerTransaction$Builder");
-        Object txBuilder = txBuilderClass.getDeclaredConstructor().newInstance();
-        Method register = txBuilderClass.getDeclaredMethod("registerFabricatedOverlay", foClass);
+        Object builder = transactionBuilder();
+        Method register = findSingleArgMethod(builder.getClass(), "registerFabricatedOverlay");
         register.setAccessible(true);
-        register.invoke(txBuilder, overlay);
-        Method build = txBuilderClass.getDeclaredMethod("build");
+        register.invoke(builder, overlay);
+        commit(builder);
+    }
+
+    private static void unregister(String simpleName) throws Exception {
+        Class<?> idClass = Class.forName("android.content.om.OverlayIdentifier");
+        Object identifier;
+        try {
+            Constructor<?> c = idClass.getDeclaredConstructor(String.class, String.class);
+            c.setAccessible(true);
+            identifier = c.newInstance(OWNER, simpleName);
+        } catch (NoSuchMethodException noCtor) {
+            Method fromString = idClass.getDeclaredMethod("fromString", String.class);
+            fromString.setAccessible(true);
+            identifier = fromString.invoke(null, OWNER + ":" + simpleName);
+        }
+
+        Object builder = transactionBuilder();
+        Method unregister = findSingleArgMethod(builder.getClass(), "unregisterFabricatedOverlay");
+        unregister.setAccessible(true);
+        unregister.invoke(builder, identifier);
+        commit(builder);
+    }
+
+    private static Object transactionBuilder() throws Exception {
+        Class<?> txBuilderClass = Class.forName("android.content.om.OverlayManagerTransaction$Builder");
+        Constructor<?> c = txBuilderClass.getDeclaredConstructor();
+        c.setAccessible(true);
+        return c.newInstance();
+    }
+
+    private static Method findSingleArgMethod(Class<?> cls, String name) throws NoSuchMethodException {
+        for (Method m : cls.getDeclaredMethods()) {
+            if (name.equals(m.getName()) && m.getParameterCount() == 1) return m;
+        }
+        throw new NoSuchMethodException(name);
+    }
+
+    private static void commit(Object txBuilder) throws Exception {
+        Method build = txBuilder.getClass().getDeclaredMethod("build");
         build.setAccessible(true);
         Object transaction = build.invoke(txBuilder);
 
@@ -177,10 +218,6 @@ public final class ElementFrroHelper {
             case "clock": return "PixelStatusClock";
             default: throw new IllegalArgumentException("unknown element");
         }
-    }
-
-    static String overlayName(String element) {
-        return OWNER + ":" + simpleName(element);
     }
 
     private static void exemptHiddenApis() {

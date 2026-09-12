@@ -24,6 +24,12 @@ jobs:
         with:
           gradle-version: '8.13'
 
+      - name: Restore stable debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: pixel-statusbar-debug-keystore-v1
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 

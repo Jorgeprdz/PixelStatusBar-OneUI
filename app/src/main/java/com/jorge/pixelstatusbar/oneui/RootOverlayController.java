@@ -81,26 +81,19 @@ final class RootOverlayController {
                 return new Result(false, "Root no pudo preparar los PNG temporales: " + detail(copied));
             }
 
-            // Never enable partially-created resources. First register all FRROs, then enable them.
             disableAll();
 
             int id = 0;
             for (int i = 0; i <= 4; i++) {
-                Result r = fabricateOne(IDS[id++],
-                        "stat_sys_wifi_signal_" + i,
-                        TMP + "/wifi_" + i + ".png");
+                Result r = fabricateOne(IDS[id++], "stat_sys_wifi_signal_" + i, TMP + "/wifi_" + i + ".png");
                 if (!r.ok) { disableAll(); return r; }
             }
             for (int i = 0; i <= 4; i++) {
-                Result r = fabricateOne(IDS[id++],
-                        "stat_sys_signal_" + i,
-                        TMP + "/mobile4_" + i + ".png");
+                Result r = fabricateOne(IDS[id++], "stat_sys_signal_" + i, TMP + "/mobile4_" + i + ".png");
                 if (!r.ok) { disableAll(); return r; }
             }
             for (int i = 0; i <= 5; i++) {
-                Result r = fabricateOne(IDS[id++],
-                        "stat_sys_signal_5level_" + i,
-                        TMP + "/mobile5_" + i + ".png");
+                Result r = fabricateOne(IDS[id++], "stat_sys_signal_5level_" + i, TMP + "/mobile5_" + i + ".png");
                 if (!r.ok) { disableAll(); return r; }
             }
 
@@ -111,7 +104,6 @@ final class RootOverlayController {
                     disableAll();
                     return new Result(false, "No pude activar " + name + ": " + diagnostic(en));
                 }
-                // Keep our icon resource above theme/color overlays without disabling them.
                 su("cmd overlay set-priority '" + overlay + "' highest >/dev/null 2>&1 || true");
             }
 
@@ -141,7 +133,7 @@ final class RootOverlayController {
     }
 
     private static Result fabricateOne(String name, String resource, String file) {
-        String cmd = "cmd overlay fabricate --user 0 --target com.android.systemui " +
+        String cmd = "cmd overlay fabricate --target com.android.systemui " +
                 "--name '" + name + "' " +
                 "com.android.systemui:drawable/" + resource + " drawable '" + file + "' 2>&1";
         ExecResult r = su(cmd);
@@ -153,7 +145,6 @@ final class RootOverlayController {
         for (String name : IDS) {
             su("cmd overlay disable --user 0 'com.android.shell:" + name + "' >/dev/null 2>&1 || true");
         }
-        // Also neutralize the old v0.2 overlay if it exists.
         su("cmd overlay disable --user 0 'com.android.shell:PixelStatus' >/dev/null 2>&1 || true");
     }
 
@@ -165,7 +156,7 @@ final class RootOverlayController {
     }
 
     private static String overlayDiagnostics() {
-        ExecResult d = su("logcat -d -t 160 2>&1 | grep -iE 'OverlayManager|idmap|Fabricated|PixelStatus|PSWifi|PSMobile|SecurityException' | tail -12");
+        ExecResult d = su("logcat -d -t 200 2>&1 | grep -iE 'OverlayManager|idmap|Fabricated|PixelStatus|PSWifi|PSMobile|SecurityException|overlayable' | tail -14");
         return oneLine(d.out);
     }
 
@@ -246,6 +237,6 @@ final class RootOverlayController {
     private static String oneLine(String s) {
         if (s == null || s.isBlank()) return "sin detalle";
         String x = s.replace('\n', ' ').replace('\r', ' ').replaceAll("\\s+", " ").trim();
-        return x.length() > 260 ? x.substring(x.length() - 260) : x;
+        return x.length() > 320 ? x.substring(x.length() - 320) : x;
     }
 }

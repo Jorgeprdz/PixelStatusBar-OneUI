@@ -39,7 +39,7 @@ public final class MainActivity extends Activity {
 
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
-        TextView sub = text("v0.4 · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
+        TextView sub = text("v0.5 · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
         sub.setAlpha(.70f); sub.setPadding(0, dp(6), 0, dp(28)); root.addView(sub);
 
         masterSwitch = new Switch(this);

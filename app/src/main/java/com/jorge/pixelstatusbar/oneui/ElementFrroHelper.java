@@ -92,12 +92,32 @@ public final class ElementFrroHelper {
             case "wifi6":
                 addWifi(entries, entryCtor, resourceName, dataType, data, configuration, "stat_sys_wifi6_signal_");
                 break;
+            case "geometry":
+                // Pixel/AOSP master geometry: spacing is mostly per-icon horizontal padding,
+                // not status_bar_system_icon_spacing. Keep this isolated from battery/clock.
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                        "status_bar_horizontal_padding", 2.5f, 2);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                        "status_bar_wifi_signal_spacer_width", 2.5f, 2);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                        "status_bar_wifi_signal_size", 15f, 2);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                        "status_bar_mobile_signal_size", 15f, 2);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                        "status_bar_mobile_signal_size_updated", 15f, 2);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                        "status_bar_system_icon_spacing", 0f, 2);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                        "status_bar_icons_padding_start", 3f, 1);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                        "status_bar_icons_padding_end", 4f, 1);
+                break;
             case "battery":
                 addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_chip_width", 20.6f, 1);
                 addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_chip_height", 12f, 1);
                 addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_chip_radius", 6f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_unified_icon_width", 20.6f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_unified_icon_height", 12f, 1);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_unified_icon_width", 20.6f, 2);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_unified_icon_height", 12f, 2);
                 break;
             case "clock":
                 addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_clock_size", 14f, 2);
@@ -105,7 +125,7 @@ public final class ElementFrroHelper {
                 addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_clock_starting_padding", 4f, 1);
                 addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_clock_end_padding", 0f, 1);
                 addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_left_clock_starting_padding", 0f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_left_clock_end_padding", 2f, 1);
+                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_left_clock_end_padding", 2f, 2);
                 break;
             default:
                 throw new IllegalArgumentException("unknown element: " + element);
@@ -214,6 +234,7 @@ public final class ElementFrroHelper {
         switch (element) {
             case "wifi_base": return "PixelStatusWifiBase";
             case "wifi6": return "PixelStatusWifi6";
+            case "geometry": return "PixelStatusGeometry";
             case "battery": return "PixelStatusBattery";
             case "clock": return "PixelStatusClock";
             default: throw new IllegalArgumentException("unknown element");

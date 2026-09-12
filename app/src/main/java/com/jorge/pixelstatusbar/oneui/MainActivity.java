@@ -1,6 +1,8 @@
 package com.jorge.pixelstatusbar.oneui;
 
 import android.app.Activity;
+import android.content.res.ColorStateList;
+import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.util.TypedValue;
@@ -35,31 +37,59 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_VERTICAL);
         root.setPadding(p, p, p, p);
-        root.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
-        TextView sub = text("v0.7 · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
-        sub.setAlpha(.70f); sub.setPadding(0, dp(6), 0, dp(28)); root.addView(sub);
+
+        TextView sub = text("v0.8 · One UI 8.5 · S25 · root temporal · sin reinicio", 15, false);
+        sub.setAlpha(.70f);
+        sub.setPadding(0, dp(6), 0, dp(28));
+        root.addView(sub);
 
         masterSwitch = new Switch(this);
         masterSwitch.setText("Iconos Pixel 11");
         masterSwitch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
         masterSwitch.setMinHeight(dp(56));
-        root.addView(masterSwitch, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        masterSwitch.setSplitTrack(false);
+
+        // One UI's inherited switch tint can become black-on-black after the FRRO is enabled.
+        // Pin only this app's switch colors so ON always remains visible.
+        int[][] switchStates = new int[][] {
+                new int[] { android.R.attr.state_checked },
+                new int[] { -android.R.attr.state_checked }
+        };
+        masterSwitch.setThumbTintList(new ColorStateList(
+                switchStates,
+                new int[] { Color.WHITE, 0xffe3e3e3 }));
+        masterSwitch.setTrackTintList(new ColorStateList(
+                switchStates,
+                new int[] { 0xff8ab4f8, 0xff5f6368 }));
+
+        root.addView(masterSwitch, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         statusText = text("Comprobando…", 16, false);
-        statusText.setPadding(0, dp(18), 0, dp(28)); root.addView(statusText);
+        statusText.setPadding(0, dp(18), 0, dp(28));
+        root.addView(statusText);
 
-        TextView safety = text("v0.7 crea un FRRO temporal propiedad de com.android.shell usando root sólo durante ON/OFF. No toca /system, boot, vbmeta, SystemUI.apk, service.d ni LSPosed. Android elimina los FRRO de shell al reiniciar.", 14, false);
-        safety.setAlpha(.72f); root.addView(safety);
+        TextView safety = text(
+                "v0.8 añade señal + Wi‑Fi 5/6/6E/7 y ajusta batería/reloj con recursos temporales. "
+                        + "No toca /system, boot, vbmeta, SystemUI.apk, service.d ni LSPosed. "
+                        + "Al reiniciar se elimina el FRRO de shell.",
+                14, false);
+        safety.setAlpha(.72f);
+        root.addView(safety);
 
         masterSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
             if (updating) return;
             masterSwitch.setEnabled(false);
-            statusText.setText(checked ? "Registrando FRRO temporal…" : "Restaurando Samsung…");
+            statusText.setText(checked ? "Aplicando Pixel a la barra de estado…" : "Restaurando Samsung…");
             worker.execute(() -> {
-                RootOverlayController.Result r = checked ? RootOverlayController.enable(this) : RootOverlayController.disable();
+                RootOverlayController.Result r = checked
+                        ? RootOverlayController.enable(this)
+                        : RootOverlayController.disable();
                 runOnUiThread(() -> {
                     statusText.setText(r.message);
                     updating = true;
@@ -78,8 +108,10 @@ public final class MainActivity extends Activity {
         worker.execute(() -> {
             boolean on = RootOverlayController.isEnabled();
             runOnUiThread(() -> {
-                updating = true; masterSwitch.setChecked(on); updating = false;
-                statusText.setText(on ? "ON · FRRO temporal activo" : "OFF · One UI original");
+                updating = true;
+                masterSwitch.setChecked(on);
+                updating = false;
+                statusText.setText(on ? "ON · Pixel Status Bar activo" : "OFF · One UI original");
                 masterSwitch.setEnabled(true);
             });
         });
@@ -93,5 +125,7 @@ public final class MainActivity extends Activity {
         return v;
     }
 
-    private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
 }

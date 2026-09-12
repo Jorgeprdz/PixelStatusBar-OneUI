@@ -10,8 +10,8 @@ android {
         applicationId = "com.jorge.pixelstatusbar.oneui.v4"
         minSdk = 31
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.7-native-reference-frro"
+        versionCode = 9
+        versionName = "0.8-full-statusbar"
     }
 
     compileOptions {

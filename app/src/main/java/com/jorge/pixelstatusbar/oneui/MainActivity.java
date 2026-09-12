@@ -47,24 +47,25 @@ public final class MainActivity extends Activity {
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
 
-        TextView sub = text("v0.13 · One UI 8.5 · S25 · root temporal", 15, false);
+        TextView sub = text("v0.14 · One UI 8.5 · S25 · root temporal", 15, false);
         sub.setAlpha(.70f);
         sub.setPadding(0, dp(6), 0, dp(22));
         root.addView(sub);
 
         TextView intro = text(
-                "Watchdog v2: tolera una sola recarga de SystemUI y revierte únicamente si detecta inestabilidad real. "
-                        + "Wi‑Fi barre FRRO antiguos antes de cada ON y crea una identidad nueva.",
+                "Wi‑Fi ahora usa un solo switch aunque internamente conserva dos FRRO independientes. "
+                        + "Geometría Pixel aplica las medidas AOSP originales: 2.5sp de padding horizontal, "
+                        + "2.5sp tras Wi‑Fi e iconos de red de 15sp. Watchdog v3 tolera una recarga controlada de SystemUI.",
                 14, false);
         intro.setAlpha(.75f);
         intro.setPadding(0, 0, 0, dp(18));
         root.addView(intro);
 
         addElement(root, RootOverlayController.MOBILE, "Señal móvil Pixel", false);
-        addElement(root, RootOverlayController.WIFI_BASE, "Wi‑Fi Pixel · base", true);
-        addElement(root, RootOverlayController.WIFI6, "Wi‑Fi Pixel · badge Wi‑Fi 6", true);
+        addElement(root, RootOverlayController.WIFI, "Wi‑Fi Pixel", false);
+        addElement(root, RootOverlayController.GEOMETRY, "Geometría Pixel", true);
         addElement(root, RootOverlayController.BATTERY, "Batería Pixel", true);
-        addElement(root, RootOverlayController.CLOCK, "Reloj Pixel", false);
+        addElement(root, RootOverlayController.CLOCK, "Reloj Pixel", true);
 
         Button restoreAll = new Button(this);
         restoreAll.setText("Restaurar todo Samsung");
@@ -136,11 +137,15 @@ public final class MainActivity extends Activity {
         setAllSwitchesEnabled(false);
         TextView status = statuses.get(key);
         if (status != null) {
-            status.setText(checked
-                    ? (RootOverlayController.WIFI_BASE.equals(key) || RootOverlayController.WIFI6.equals(key)
-                        ? "LIMPIANDO FRRO antiguos… después PROBANDO…"
-                        : "PROBANDO… watchdog v2 armado")
-                    : "Restaurando Samsung y limpiando FRRO…");
+            if (!checked) {
+                status.setText("Restaurando Samsung y limpiando FRRO…");
+            } else if (RootOverlayController.WIFI.equals(key)) {
+                status.setText("PROBANDO… base + Wi‑Fi 6 con watchdog independiente");
+            } else if (RootOverlayController.GEOMETRY.equals(key)) {
+                status.setText("PROBANDO… geometría Pixel 1:1");
+            } else {
+                status.setText("PROBANDO… watchdog v3 armado");
+            }
         }
 
         worker.execute(() -> {
@@ -173,12 +178,23 @@ public final class MainActivity extends Activity {
             Switch sw = switches.get(key);
             if (sw != null) sw.setChecked(on);
             TextView status = statuses.get(key);
-            if (status != null) {
-                String state = RootOverlayController.state(key);
-                if ("ESTABLE".equals(state)) status.setText("ESTABLE · ON");
+            if (status == null) continue;
+
+            String state = RootOverlayController.state(key);
+            if (RootOverlayController.BATTERY.equals(key) || RootOverlayController.CLOCK.equals(key)) {
+                if (on) status.setText("FRRO ACTIVO · sin cambio visual todavía");
                 else if ("AUTO-REVERTIDO".equals(state)) status.setText("AUTO-REVERTIDO · Samsung restaurado");
-                else if (on) status.setText("ON · activo");
                 else status.setText("OFF · Samsung");
+            } else if ("ESTABLE".equals(state)) {
+                status.setText("ESTABLE · ON");
+            } else if ("PARCIAL".equals(state)) {
+                status.setText("PARCIAL · apaga y vuelve a activar Wi‑Fi Pixel");
+            } else if ("AUTO-REVERTIDO".equals(state)) {
+                status.setText("AUTO-REVERTIDO · Samsung restaurado");
+            } else if (on) {
+                status.setText("ON · activo");
+            } else {
+                status.setText("OFF · Samsung");
             }
         }
         updating = false;

@@ -75,10 +75,12 @@ final class RootOverlayController {
                 prep.append("cp '").append(f.getAbsolutePath()).append("' '")
                         .append(TMP).append('/').append(f.getName()).append("'; ");
             }
-            prep.append("chmod 755 '").append(TMP).append("'; chmod 644 '").append(TMP).append("'/*.png");
+            prep.append("chmod 755 '").append(TMP).append("'; chmod 644 '").append(TMP).append("'/*.png; ")
+                    .append("restorecon -RF '").append(TMP).append("' >/dev/null 2>&1 || true; ")
+                    .append("ls -Zd '").append(TMP).append("' 2>/dev/null; ls -Z '").append(TMP).append("'/*.png 2>/dev/null | head -1");
             ExecResult copied = su(prep.toString());
             if (copied.code != 0) {
-                return new Result(false, "Root no pudo preparar los PNG temporales: " + detail(copied));
+                return new Result(false, "Root no pudo preparar los PNG temporales: " + firstUseful(copied.out, 500));
             }
 
             disableAll();
@@ -108,14 +110,15 @@ final class RootOverlayController {
             }
 
             if (!isEnabled()) {
+                String d = overlayDiagnostics();
                 disableAll();
-                return new Result(false, "Los FRRO se registraron pero SystemUI no los dejó activos. " + overlayDiagnostics());
+                return new Result(false, "Los FRRO se registraron pero SystemUI no los dejó activos. " + d);
             }
 
             return new Result(true, "ON · Pixel Wi‑Fi y señal activos. FRRO temporal, sin reinicio.");
         } catch (Throwable t) {
             try { disableAll(); } catch (Throwable ignored) {}
-            return new Result(false, "Falló de forma segura: " + t.getClass().getSimpleName());
+            return new Result(false, "Falló de forma segura: " + t.getClass().getSimpleName() + ": " + String.valueOf(t.getMessage()));
         }
     }
 
@@ -133,12 +136,16 @@ final class RootOverlayController {
     }
 
     private static Result fabricateOne(String name, String resource, String file) {
+        // Samsung's own help on this build accepts TYPE-NAME + file path for drawable FRROs.
         String cmd = "cmd overlay fabricate --target com.android.systemui " +
                 "--name '" + name + "' " +
                 "com.android.systemui:drawable/" + resource + " drawable '" + file + "' 2>&1";
         ExecResult r = su(cmd);
         if (r.code == 0) return new Result(true, "ok");
-        return new Result(false, "SystemUI rechazó " + resource + ": " + diagnostic(r));
+
+        String direct = firstUseful(r.out, 850);
+        if (direct.equals("sin detalle")) direct = overlayDiagnostics();
+        return new Result(false, "SystemUI rechazó " + resource + ":\n" + direct);
     }
 
     private static void disableAll() {
@@ -149,20 +156,15 @@ final class RootOverlayController {
     }
 
     private static String diagnostic(ExecResult r) {
-        String direct = oneLine(r.out);
+        String direct = firstUseful(r.out, 700);
         if (!direct.equals("sin detalle")) return direct;
         String logs = overlayDiagnostics();
         return logs.isBlank() ? "exit=" + r.code + " sin detalle" : logs;
     }
 
     private static String overlayDiagnostics() {
-        ExecResult d = su("logcat -d -t 200 2>&1 | grep -iE 'OverlayManager|idmap|Fabricated|PixelStatus|PSWifi|PSMobile|SecurityException|overlayable' | tail -14");
-        return oneLine(d.out);
-    }
-
-    private static String detail(ExecResult r) {
-        String s = oneLine(r.out);
-        return s.equals("sin detalle") ? "exit=" + r.code : s;
+        ExecResult d = su("logcat -d -t 260 2>&1 | grep -iE 'OverlayManager|idmap|Fabricated|PixelStatus|PSWifi|PSMobile|SecurityException|overlayable|Unable to open file|Failure opening file' | tail -24");
+        return firstUseful(d.out, 1000);
     }
 
     private static ExecResult su(String command) {
@@ -177,7 +179,7 @@ final class RootOverlayController {
             return new ExecResult(p.exitValue(), out.trim());
         } catch (Throwable t) {
             if (p != null) p.destroyForcibly();
-            return new ExecResult(127, t.getClass().getSimpleName());
+            return new ExecResult(127, t.getClass().getSimpleName() + ": " + String.valueOf(t.getMessage()));
         }
     }
 
@@ -234,9 +236,11 @@ final class RootOverlayController {
         }
     }
 
-    private static String oneLine(String s) {
+    private static String firstUseful(String s, int max) {
         if (s == null || s.isBlank()) return "sin detalle";
-        String x = s.replace('\n', ' ').replace('\r', ' ').replaceAll("\\s+", " ").trim();
-        return x.length() > 320 ? x.substring(x.length() - 320) : x;
+        String x = s.replace('\r', ' ').trim();
+        // Preserve the beginning: that is where Android prints the exception/message.
+        if (x.length() > max) x = x.substring(0, max);
+        return x;
     }
 }

@@ -41,7 +41,8 @@ final class RootOverlayController {
             ExecResult en = su("cmd overlay enable --user 0 '" + OVERLAY + "' 2>&1");
             if (en.code != 0) {
                 disableNative();
-                return new Result(false, "El FRRO se creó pero Samsung rechazó activarlo:\n" + firstUseful(en.out, 900));
+                return new Result(false, "El FRRO se creó pero Samsung rechazó activarlo:\n"
+                        + firstUseful(en.out, 900));
             }
 
             su("cmd overlay set-priority '" + OVERLAY + "' highest >/dev/null 2>&1 || true");
@@ -53,8 +54,7 @@ final class RootOverlayController {
             }
 
             return new Result(true,
-                    "ON · FRRO de referencias activo en memoria de overlays. "
-                            + "Propietario shell: Android lo elimina al reiniciar.");
+                    "ON · Pixel: señal + Wi‑Fi + batería + reloj. FRRO temporal activo.");
         } catch (Throwable t) {
             try { disableNative(); } catch (Throwable ignored) {}
             return new Result(false, "Falló de forma segura: " + t.getClass().getSimpleName()

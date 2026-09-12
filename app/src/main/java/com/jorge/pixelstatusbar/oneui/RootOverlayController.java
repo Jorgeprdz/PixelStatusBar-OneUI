@@ -1,17 +1,27 @@
 package com.jorge.pixelstatusbar.oneui;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
 
 import java.io.File;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 final class RootOverlayController {
-    static final String OVERLAY_ID = "com.android.shell:PixelStatus";
     private static final String TMP = "/data/local/tmp/pixel_status_bar";
+
+    private static final String[] IDS = {
+            "PSWifi0", "PSWifi1", "PSWifi2", "PSWifi3", "PSWifi4",
+            "PSMobile4_0", "PSMobile4_1", "PSMobile4_2", "PSMobile4_3", "PSMobile4_4",
+            "PSMobile5_0", "PSMobile5_1", "PSMobile5_2", "PSMobile5_3", "PSMobile5_4", "PSMobile5_5"
+    };
 
     static final class Result {
         final boolean ok;
@@ -20,88 +30,155 @@ final class RootOverlayController {
     }
 
     private static final class ExecResult {
-        final int code; final String out;
-        ExecResult(int code, String out) { this.code = code; this.out = out; }
+        final int code;
+        final String out;
+        ExecResult(int code, String out) { this.code = code; this.out = out == null ? "" : out; }
     }
 
     static Result enable(Context context) {
         try {
             ExecResult root = su("id");
-            if (root.code != 0 || !root.out.contains("uid=0")) return new Result(false, "No obtuve root. Autoriza la app en tu gestor de root.");
+            if (root.code != 0 || !root.out.contains("uid=0")) {
+                return new Result(false, "No obtuve root. Autoriza Pixel Status Bar en tu gestor de root.");
+            }
 
-            ExecResult help = su("cmd overlay help 2>&1 | grep -q fabricate");
-            if (help.code != 0) return new Result(false, "Este build no expone cmd overlay fabricate.");
+            ExecResult help = su("cmd overlay help 2>&1 | grep -q 'fabricate'");
+            if (help.code != 0) {
+                return new Result(false, "Este build no expone cmd overlay fabricate.");
+            }
 
-            File work = new File(context.getCacheDir(), "frro");
-            if (!work.exists() && !work.mkdirs()) return new Result(false, "No pude preparar archivos temporales.");
+            File work = new File(context.getCacheDir(), "frro_png");
+            if (!work.exists() && !work.mkdirs()) {
+                return new Result(false, "No pude preparar los iconos temporales.");
+            }
 
-            List<String> names = new ArrayList<>();
+            List<File> files = new ArrayList<>();
             for (int i = 0; i <= 4; i++) {
-                write(new File(work, "wifi_" + i + ".xml"), wifiVector(i));
-                names.add("wifi_" + i + ".xml");
-                write(new File(work, "mobile4_" + i + ".xml"), mobileVector(i, 4));
-                names.add("mobile4_" + i + ".xml");
+                File f = new File(work, "wifi_" + i + ".png");
+                writeWifiPng(f, i);
+                files.add(f);
+            }
+            for (int i = 0; i <= 4; i++) {
+                File f = new File(work, "mobile4_" + i + ".png");
+                writeMobilePng(f, i, 4);
+                files.add(f);
             }
             for (int i = 0; i <= 5; i++) {
-                write(new File(work, "mobile5_" + i + ".xml"), mobileVector(i, 5));
-                names.add("mobile5_" + i + ".xml");
+                File f = new File(work, "mobile5_" + i + ".png");
+                writeMobilePng(f, i, 5);
+                files.add(f);
             }
 
-            StringBuilder map = new StringBuilder("<overlay>\n");
-            for (int i = 0; i <= 4; i++) {
-                map.append("  <item target=\"drawable/stat_sys_wifi_signal_").append(i).append("\" value=\"").append(TMP).append("/wifi_").append(i).append(".xml\"/>\n");
-                map.append("  <item target=\"drawable/stat_sys_signal_").append(i).append("\" value=\"").append(TMP).append("/mobile4_").append(i).append(".xml\"/>\n");
+            StringBuilder prep = new StringBuilder("rm -rf '").append(TMP)
+                    .append("'; mkdir -p '").append(TMP).append("'; ");
+            for (File f : files) {
+                prep.append("cp '").append(f.getAbsolutePath()).append("' '")
+                        .append(TMP).append('/').append(f.getName()).append("'; ");
             }
-            for (int i = 0; i <= 5; i++) {
-                map.append("  <item target=\"drawable/stat_sys_signal_5level_").append(i).append("\" value=\"").append(TMP).append("/mobile5_").append(i).append(".xml\"/>\n");
-            }
-            map.append("</overlay>\n");
-            write(new File(work, "overlay.xml"), map.toString());
-            names.add("overlay.xml");
-
-            StringBuilder prep = new StringBuilder("rm -rf '").append(TMP).append("'; mkdir -p '").append(TMP).append("'; ");
-            for (String name : names) {
-                prep.append("cp '").append(new File(work, name).getAbsolutePath()).append("' '").append(TMP).append('/').append(name).append("'; ");
-            }
-            prep.append("chmod 755 '").append(TMP).append("'; chmod 644 '").append(TMP).append("'/*");
+            prep.append("chmod 755 '").append(TMP).append("'; chmod 644 '").append(TMP).append("'/*.png");
             ExecResult copied = su(prep.toString());
-            if (copied.code != 0) return new Result(false, "Root no pudo preparar los drawables temporales.");
-
-            su("cmd overlay disable --user 0 '" + OVERLAY_ID + "' >/dev/null 2>&1 || true");
-            ExecResult fab = su("cmd overlay fabricate --target com.android.systemui --name PixelStatus --file '" + TMP + "/overlay.xml' 2>&1");
-            if (fab.code != 0) {
-                su("cmd overlay disable --user 0 '" + OVERLAY_ID + "' >/dev/null 2>&1 || true");
-                return new Result(false, "SystemUI rechazó el overlay: " + oneLine(fab.out));
+            if (copied.code != 0) {
+                return new Result(false, "Root no pudo preparar los PNG temporales: " + detail(copied));
             }
 
-            ExecResult en = su("cmd overlay enable --user 0 '" + OVERLAY_ID + "' 2>&1");
-            if (en.code != 0 || !isEnabled()) {
-                su("cmd overlay disable --user 0 '" + OVERLAY_ID + "' >/dev/null 2>&1 || true");
-                return new Result(false, "No pude activar el overlay: " + oneLine(en.out));
+            // Never enable partially-created resources. First register all FRROs, then enable them.
+            disableAll();
+
+            int id = 0;
+            for (int i = 0; i <= 4; i++) {
+                Result r = fabricateOne(IDS[id++],
+                        "stat_sys_wifi_signal_" + i,
+                        TMP + "/wifi_" + i + ".png");
+                if (!r.ok) { disableAll(); return r; }
             }
-            return new Result(true, "ON · Pixel Wi‑Fi y señal activos. Sin reinicio.");
+            for (int i = 0; i <= 4; i++) {
+                Result r = fabricateOne(IDS[id++],
+                        "stat_sys_signal_" + i,
+                        TMP + "/mobile4_" + i + ".png");
+                if (!r.ok) { disableAll(); return r; }
+            }
+            for (int i = 0; i <= 5; i++) {
+                Result r = fabricateOne(IDS[id++],
+                        "stat_sys_signal_5level_" + i,
+                        TMP + "/mobile5_" + i + ".png");
+                if (!r.ok) { disableAll(); return r; }
+            }
+
+            for (String name : IDS) {
+                String overlay = "com.android.shell:" + name;
+                ExecResult en = su("cmd overlay enable --user 0 '" + overlay + "' 2>&1");
+                if (en.code != 0) {
+                    disableAll();
+                    return new Result(false, "No pude activar " + name + ": " + diagnostic(en));
+                }
+                // Keep our icon resource above theme/color overlays without disabling them.
+                su("cmd overlay set-priority '" + overlay + "' highest >/dev/null 2>&1 || true");
+            }
+
+            if (!isEnabled()) {
+                disableAll();
+                return new Result(false, "Los FRRO se registraron pero SystemUI no los dejó activos. " + overlayDiagnostics());
+            }
+
+            return new Result(true, "ON · Pixel Wi‑Fi y señal activos. FRRO temporal, sin reinicio.");
         } catch (Throwable t) {
-            try { su("cmd overlay disable --user 0 '" + OVERLAY_ID + "' >/dev/null 2>&1 || true"); } catch (Throwable ignored) {}
+            try { disableAll(); } catch (Throwable ignored) {}
             return new Result(false, "Falló de forma segura: " + t.getClass().getSimpleName());
         }
     }
 
     static Result disable() {
-        ExecResult r = su("cmd overlay disable --user 0 '" + OVERLAY_ID + "' 2>&1");
-        if (r.code == 0 && !isEnabled()) return new Result(true, "OFF · iconos Samsung restaurados.");
-        return new Result(false, "No pude desactivar el overlay. Si perdiste root, reiniciar lo elimina automáticamente.");
+        disableAll();
+        if (!isEnabled()) return new Result(true, "OFF · iconos Samsung restaurados.");
+        return new Result(false, "No pude desactivar todos los FRRO. Si el root ya se perdió, el reinicio los elimina.");
     }
 
     static boolean isEnabled() {
-        ExecResult r = su("cmd overlay list --user 0 com.android.systemui 2>/dev/null | grep -F '" + OVERLAY_ID + "'");
-        return r.code == 0 && r.out.contains("[x]");
+        ExecResult r = su("cmd overlay list --user 0 com.android.systemui 2>/dev/null | grep -E '\\[x\\] com.android.shell:PS(Wifi|Mobile)' | wc -l");
+        if (r.code != 0) return false;
+        try { return Integer.parseInt(r.out.trim()) == IDS.length; }
+        catch (Throwable ignored) { return false; }
+    }
+
+    private static Result fabricateOne(String name, String resource, String file) {
+        String cmd = "cmd overlay fabricate --user 0 --target com.android.systemui " +
+                "--name '" + name + "' " +
+                "com.android.systemui:drawable/" + resource + " drawable '" + file + "' 2>&1";
+        ExecResult r = su(cmd);
+        if (r.code == 0) return new Result(true, "ok");
+        return new Result(false, "SystemUI rechazó " + resource + ": " + diagnostic(r));
+    }
+
+    private static void disableAll() {
+        for (String name : IDS) {
+            su("cmd overlay disable --user 0 'com.android.shell:" + name + "' >/dev/null 2>&1 || true");
+        }
+        // Also neutralize the old v0.2 overlay if it exists.
+        su("cmd overlay disable --user 0 'com.android.shell:PixelStatus' >/dev/null 2>&1 || true");
+    }
+
+    private static String diagnostic(ExecResult r) {
+        String direct = oneLine(r.out);
+        if (!direct.equals("sin detalle")) return direct;
+        String logs = overlayDiagnostics();
+        return logs.isBlank() ? "exit=" + r.code + " sin detalle" : logs;
+    }
+
+    private static String overlayDiagnostics() {
+        ExecResult d = su("logcat -d -t 160 2>&1 | grep -iE 'OverlayManager|idmap|Fabricated|PixelStatus|PSWifi|PSMobile|SecurityException' | tail -12");
+        return oneLine(d.out);
+    }
+
+    private static String detail(ExecResult r) {
+        String s = oneLine(r.out);
+        return s.equals("sin detalle") ? "exit=" + r.code : s;
     }
 
     private static ExecResult su(String command) {
         Process p = null;
         try {
             p = new ProcessBuilder("su", "-c", command).redirectErrorStream(true).start();
-            if (!p.waitFor(15, TimeUnit.SECONDS)) {
+            if (!p.waitFor(12, TimeUnit.SECONDS)) {
                 p.destroyForcibly();
                 return new ExecResult(124, "timeout");
             }
@@ -113,45 +190,62 @@ final class RootOverlayController {
         }
     }
 
-    private static void write(File file, String text) throws Exception {
-        try (FileWriter w = new FileWriter(file, StandardCharsets.UTF_8)) { w.write(text); }
+    private static void writeWifiPng(File file, int level) throws Exception {
+        final int w = 72, h = 52;
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(b);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(Color.WHITE);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStrokeWidth(6f);
+        float cx = 36f, cy = 38f;
+        float[] radii = {29f, 21f, 13f};
+        for (int i = 0; i < 3; i++) {
+            int threshold = i == 0 ? 4 : (i == 1 ? 3 : 2);
+            p.setAlpha(level >= threshold ? 255 : 64);
+            float r = radii[i];
+            c.drawArc(new RectF(cx-r, cy-r, cx+r, cy+r), 220f, 100f, false, p);
+        }
+        p.setStyle(Paint.Style.FILL);
+        p.setAlpha(level >= 1 ? 255 : 64);
+        c.drawCircle(cx, 43f, 4.6f, p);
+        savePng(b, file);
+    }
+
+    private static void writeMobilePng(File file, int level, int max) throws Exception {
+        final int w = max == 5 ? 72 : 60, h = 56;
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(b);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(Color.WHITE);
+        p.setStyle(Paint.Style.FILL);
+        int normalized = Math.round((level / (float) max) * max);
+        float left = 4f, bottom = 52f;
+        float barW = max == 5 ? 9f : 10f;
+        float gap = max == 5 ? 4f : 5f;
+        for (int i = 0; i < max; i++) {
+            float bh = 12f + i * (36f / Math.max(1, max - 1));
+            float x = left + i * (barW + gap);
+            p.setAlpha(i < normalized ? 255 : 76);
+            c.drawRoundRect(new RectF(x, bottom-bh, x+barW, bottom), 2.6f, 2.6f, p);
+        }
+        savePng(b, file);
+    }
+
+    private static void savePng(Bitmap bitmap, File file) throws Exception {
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                throw new IllegalStateException("PNG encode failed");
+            }
+        } finally {
+            bitmap.recycle();
+        }
     }
 
     private static String oneLine(String s) {
         if (s == null || s.isBlank()) return "sin detalle";
-        String x = s.replace('\n', ' ').replace('\r', ' ').trim();
-        return x.length() > 120 ? x.substring(0, 120) : x;
-    }
-
-    private static String wifiVector(int level) {
-        float[] a = new float[] {0.24f, 0.24f, 0.24f, 0.24f};
-        if (level >= 1) a[3] = 1f;
-        if (level >= 2) a[2] = 1f;
-        if (level >= 3) a[1] = 1f;
-        if (level >= 4) a[0] = 1f;
-        return "<vector xmlns:android=\"http://schemas.android.com/apk/res/android\" android:width=\"18dp\" android:height=\"13dp\" android:viewportWidth=\"18\" android:viewportHeight=\"13\">" +
-                path("M0.523,3.314C0.32,3.502 0.32,3.819 0.516,4.015L1.223,4.722C1.418,4.917 1.734,4.916 1.938,4.73C5.936,1.09 12.066,1.09 16.064,4.73C16.268,4.916 16.584,4.917 16.779,4.722L17.486,4.015C17.682,3.819 17.682,3.502 17.479,3.314C12.698,-1.105 5.304,-1.105 0.523,3.314Z", a[0]) +
-                path("M15.011,6.49C15.207,6.294 15.207,5.976 15.002,5.792C11.592,2.736 6.411,2.736 3,5.792C2.795,5.976 2.795,6.294 2.991,6.49L3.698,7.197C3.893,7.392 4.209,7.39 4.417,7.209C7.042,4.93 10.96,4.93 13.585,7.209C13.793,7.39 14.109,7.392 14.304,7.197L15.011,6.49Z", a[1]) +
-                path("M5.465,8.964C5.27,8.769 5.269,8.45 5.481,8.273C7.515,6.576 10.487,6.576 12.521,8.273C12.733,8.45 12.732,8.769 12.537,8.964L11.83,9.672C11.634,9.867 11.319,9.863 11.099,9.698C9.859,8.767 8.143,8.767 6.904,9.698C6.683,9.863 6.368,9.867 6.173,9.672L5.465,8.964Z", a[2]) +
-                path("M10.062,11.439C10.257,11.244 10.259,10.92 10.022,10.779C9.395,10.407 8.608,10.407 7.98,10.779C7.743,10.92 7.745,11.244 7.94,11.439L8.647,12.146C8.843,12.342 9.159,12.342 9.355,12.146L10.062,11.439Z", a[3]) + "</vector>";
-    }
-
-    private static String mobileVector(int level, int max) {
-        int bars = max;
-        float width = max == 5 ? 18f : 14f;
-        StringBuilder s = new StringBuilder("<vector xmlns:android=\"http://schemas.android.com/apk/res/android\" android:width=\"").append((int)width).append("dp\" android:height=\"14dp\" android:viewportWidth=\"").append(width).append("\" android:viewportHeight=\"14\">");
-        for (int i = 0; i < bars; i++) {
-            float gap = max == 5 ? 3.5f : 4f;
-            float x = i * gap;
-            float h = 3f + i * (11f / (bars - 1));
-            float y = 14f - h;
-            float alpha = i < level ? 1f : 0.30f;
-            s.append("<path android:pathData=\"M").append(x).append(',').append(y).append(" h2 v").append(h).append(" h-2 z\" android:fillColor=\"#FFFFFFFF\" android:fillAlpha=\"").append(alpha).append("\"/>");
-        }
-        return s.append("</vector>").toString();
-    }
-
-    private static String path(String data, float alpha) {
-        return "<path android:pathData=\"" + data + "\" android:fillColor=\"#FFFFFFFF\" android:fillAlpha=\"" + alpha + "\"/>";
+        String x = s.replace('\n', ' ').replace('\r', ' ').replaceAll("\\s+", " ").trim();
+        return x.length() > 260 ? x.substring(x.length() - 260) : x;
     }
 }

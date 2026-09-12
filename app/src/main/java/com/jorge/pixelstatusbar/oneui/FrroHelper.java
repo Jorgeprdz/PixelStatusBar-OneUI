@@ -10,41 +10,52 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Runs under app_process as uid 0. It bypasses only the Java shell wrapper's
- * TypedValue integer range check so TYPE_REFERENCE (0x01) can reach idmap2,
- * which natively supports reference entries in fabricated overlays.
+ * Runs under app_process as uid 0. Builds one temporary shell-owned FRRO.
+ * Nothing is written to /system and nothing is installed for boot.
  */
 public final class FrroHelper {
     private static final String OWNER = "com.android.shell";
     private static final String NAME = "PixelStatusNative";
     private static final String TARGET = "com.android.systemui";
 
-    private static final String[] TARGETS = {
-            "stat_sys_wifi_signal_0", "stat_sys_wifi_signal_1", "stat_sys_wifi_signal_2",
-            "stat_sys_wifi_signal_3", "stat_sys_wifi_signal_4",
-            "stat_sys_signal_0", "stat_sys_signal_1", "stat_sys_signal_2",
-            "stat_sys_signal_3", "stat_sys_signal_4",
-            "stat_sys_signal_5level_0", "stat_sys_signal_5level_1",
-            "stat_sys_signal_5level_2", "stat_sys_signal_5level_3",
-            "stat_sys_signal_5level_4", "stat_sys_signal_5level_5"
+    // Existing AOSP/Pixel-style connectivity drawables already shipped inside this exact SystemUI.
+    private static final int[] WIFI_REFS = {
+            0x7e080e33, // ic_wifi_0
+            0x7e080e35, // ic_wifi_1
+            0x7e080e37, // ic_wifi_2
+            0x7e080e39, // ic_wifi_3
+            0x7e080e39  // strongest state uses ic_wifi_3
     };
 
-    private static final int[] REFS = {
-            0x7e080e33, 0x7e080e35, 0x7e080e37, 0x7e080e39, 0x7e080e39,
-            0x7e080c20, 0x7e080c24, 0x7e080c28, 0x7e080c2c, 0x7e080c30,
+    private static final int[] MOBILE4_REFS = {
+            0x7e080c20, 0x7e080c24, 0x7e080c28, 0x7e080c2c, 0x7e080c30
+    };
+
+    private static final int[] MOBILE5_REFS = {
             0x7e080c22, 0x7e080c26, 0x7e080c2a, 0x7e080c2e, 0x7e080c32, 0x7e080c34
+    };
+
+    // Samsung chooses a different stat_sys family depending on the negotiated Wi-Fi generation.
+    // Cover all normal families so Wi-Fi 5/6/6E/7 cannot fall back to the Samsung glyph/badge.
+    private static final String[] WIFI_PREFIXES = {
+            "stat_sys_wifi_signal_",
+            "stat_sys_wifi5_signal_",
+            "stat_sys_wifi6_signal_",
+            "stat_sys_6ewifi_signal_",
+            "stat_sys_wifi7_signal_"
     };
 
     public static void main(String[] args) {
         try {
             exemptHiddenApis();
-            registerReferenceOverlay();
+            registerOverlay();
             System.out.println("REGISTERED " + OWNER + ":" + NAME);
         } catch (Throwable t) {
             Throwable root = unwrap(t);
-            System.err.println("FRRO_HELPER_ERROR: " + root.getClass().getName() + ": " + String.valueOf(root.getMessage()));
+            System.err.println("FRRO_HELPER_ERROR: " + root.getClass().getName() + ": "
+                    + String.valueOf(root.getMessage()));
             StackTraceElement[] st = root.getStackTrace();
-            for (int i = 0; i < Math.min(st.length, 8); i++) {
+            for (int i = 0; i < Math.min(st.length, 10); i++) {
                 System.err.println("  at " + st[i]);
             }
             System.exit(1);
@@ -52,7 +63,7 @@ public final class FrroHelper {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void registerReferenceOverlay() throws Exception {
+    private static void registerOverlay() throws Exception {
         Class<?> foClass = Class.forName("android.content.om.FabricatedOverlay");
         Constructor<?> ctor = foClass.getDeclaredConstructor(String.class, String.class);
         ctor.setAccessible(true);
@@ -67,7 +78,7 @@ public final class FrroHelper {
             setTargetOverlayable.setAccessible(true);
             setTargetOverlayable.invoke(overlay, new Object[]{null});
         } catch (NoSuchMethodException ignored) {
-            // Older vendor framework: blank targetOverlayable is already the constructor default.
+            // Samsung's FRRO for SystemUI also has a blank targetOverlayableName.
         }
 
         Field internalField = foClass.getDeclaredField("mOverlay");
@@ -93,14 +104,57 @@ public final class FrroHelper {
         Field data = entryClass.getField("data");
         Field configuration = entryClass.getField("configuration");
 
-        for (int i = 0; i < TARGETS.length; i++) {
-            Object entry = entryCtor.newInstance();
-            resourceName.set(entry, TARGET + ":drawable/" + TARGETS[i]);
-            dataType.setInt(entry, 0x01); // Res_value::TYPE_REFERENCE
-            data.setInt(entry, REFS[i]);
-            configuration.set(entry, null);
-            entries.add(entry);
+        // Wi-Fi: normal plus Wi-Fi 5/6/6E/7 status families -> Pixel/AOSP segmented Wi-Fi.
+        for (String prefix : WIFI_PREFIXES) {
+            for (int level = 0; level <= 4; level++) {
+                addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
+                        TARGET + ":drawable/" + prefix + level,
+                        0x01, WIFI_REFS[level]);
+            }
         }
+
+        // Mobile signal: already proven on this S25 in v0.7.
+        for (int level = 0; level <= 4; level++) {
+            addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
+                    TARGET + ":drawable/stat_sys_signal_" + level,
+                    0x01, MOBILE4_REFS[level]);
+        }
+        for (int level = 0; level <= 5; level++) {
+            addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
+                    TARGET + ":drawable/stat_sys_signal_5level_" + level,
+                    0x01, MOBILE5_REFS[level]);
+        }
+
+        // Pixel/AOSP current status-bar metrics. These are scalar FRRO entries only; no layout APK
+        // replacement. Battery remains Samsung's live level renderer but gets Pixel unified proportions.
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_wifi_signal_size", 15f, 2); // sp
+
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_battery_chip_width", 20.6f, 2); // sp
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_battery_chip_height", 12f, 2); // sp
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_battery_chip_radius", 6f, 2); // sp
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_battery_unified_icon_width", 20.6f, 2); // sp
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_battery_unified_icon_height", 12f, 2); // sp
+
+        // Pixel clock: AOSP uses 14sp and compact 4dp start padding. Samsung's layout already uses
+        // weight 600, so this changes only safe resource-backed metrics.
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_clock_size", 14f, 2); // sp
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "sec_status_bar_clock_size", 14f, 2); // sp
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_clock_starting_padding", 4f, 1); // dp
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_clock_end_padding", 0f, 1); // dp
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_left_clock_starting_padding", 0f, 1); // dp
+        addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
+                "status_bar_left_clock_end_padding", 2f, 2); // sp
 
         Class<?> txBuilderClass = Class.forName("android.content.om.OverlayManagerTransaction$Builder");
         Object txBuilder = txBuilderClass.getDeclaredConstructor().newInstance();
@@ -129,6 +183,34 @@ public final class FrroHelper {
         commit.invoke(iom, transaction);
     }
 
+    private static void addDimen(List entries, Constructor<?> entryCtor,
+            Field resourceName, Field dataType, Field data, Field configuration,
+            String name, float value, int unit) throws Exception {
+        addEntry(entries, entryCtor, resourceName, dataType, data, configuration,
+                TARGET + ":dimen/" + name,
+                0x05, complexDimension(value, unit)); // Res_value::TYPE_DIMENSION
+    }
+
+    private static void addEntry(List entries, Constructor<?> entryCtor,
+            Field resourceName, Field dataType, Field data, Field configuration,
+            String targetName, int type, int value) throws Exception {
+        Object entry = entryCtor.newInstance();
+        resourceName.set(entry, targetName);
+        dataType.setInt(entry, type);
+        data.setInt(entry, value);
+        configuration.set(entry, null);
+        entries.add(entry);
+    }
+
+    /**
+     * Encode a positive Android complex dimension with 1/256 precision.
+     * unit: 1=dp, 2=sp. Radix 23p8 is plenty for status-bar dimensions.
+     */
+    private static int complexDimension(float value, int unit) {
+        int mantissa = Math.round(value * 256f);
+        return (mantissa << 8) | (2 << 4) | (unit & 0xf);
+    }
+
     private static void exemptHiddenApis() {
         try {
             Class<?> vmRuntime = Class.forName("dalvik.system.VMRuntime");
@@ -139,7 +221,7 @@ public final class FrroHelper {
             setExemptions.setAccessible(true);
             setExemptions.invoke(runtime, (Object) new String[]{"L"});
         } catch (Throwable ignored) {
-            // app_process/root is commonly exempt already; continue and report real failure if not.
+            // app_process/root is commonly exempt already; report a real reflection failure later.
         }
     }
 

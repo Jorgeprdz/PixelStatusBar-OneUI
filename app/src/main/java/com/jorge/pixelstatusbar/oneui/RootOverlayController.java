@@ -3,9 +3,13 @@ package com.jorge.pixelstatusbar.oneui;
 import android.content.Context;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-/** v0.12: modular FRROs; Wi-Fi gets a fresh overlay identity every activation. */
+/** v0.13: modular FRROs, orphan cleanup and watchdog v2. */
 final class RootOverlayController {
     static final String MOBILE = "mobile";
     static final String WIFI_BASE = "wifi_base";
@@ -31,6 +35,17 @@ final class RootOverlayController {
         final int code;
         final String out;
         ExecResult(int code, String out) { this.code = code; this.out = out == null ? "" : out; }
+    }
+
+    private static final class StabilityResult {
+        final boolean stable;
+        final int pidChanges;
+        final String finalPid;
+        StabilityResult(boolean stable, int pidChanges, String finalPid) {
+            this.stable = stable;
+            this.pidChanges = pidChanges;
+            this.finalPid = finalPid == null ? "" : finalPid;
+        }
     }
 
     static Result enable(Context context, String element) {
@@ -71,6 +86,7 @@ final class RootOverlayController {
             if (reg.code != 0 || !reg.out.contains("REGISTERED")) {
                 disableOverlay(overlay);
                 if (simpleName != null) unregisterSimple(context, simpleName);
+                if (isWifi(element)) sweepWifiFamily(context, element);
                 clearTrackedOverlay(element);
                 writeState(element, "AUTO_REVERTED");
                 return new Result(false, label(element) + ": no pude registrar FRRO:\n" + firstUseful(reg.out, 1000));
@@ -82,6 +98,7 @@ final class RootOverlayController {
             if (pidBefore.isBlank()) {
                 disableOverlay(overlay);
                 if (simpleName != null) unregisterSimple(context, simpleName);
+                if (isWifi(element)) sweepWifiFamily(context, element);
                 clearTrackedOverlay(element);
                 writeState(element, "AUTO_REVERTED");
                 return new Result(false, label(element) + ": SystemUI no estaba disponible antes de probar.");
@@ -94,6 +111,7 @@ final class RootOverlayController {
             if (en.code != 0) {
                 disableOverlay(overlay);
                 if (simpleName != null) unregisterSimple(context, simpleName);
+                if (isWifi(element)) sweepWifiFamily(context, element);
                 clearTrackedOverlay(element);
                 cancelWatchdog(watchdogPid);
                 writeState(element, "AUTO_REVERTED");
@@ -104,39 +122,44 @@ final class RootOverlayController {
             if (!isOverlayEnabled(overlay)) {
                 disableOverlay(overlay);
                 if (simpleName != null) unregisterSimple(context, simpleName);
+                if (isWifi(element)) sweepWifiFamily(context, element);
                 clearTrackedOverlay(element);
                 cancelWatchdog(watchdogPid);
                 writeState(element, "AUTO_REVERTED");
                 return new Result(false, label(element) + ": no quedó activo; Samsung restaurado.");
             }
 
-            // Strict stability test: one SystemUI PID change is enough to reject this activation.
-            Thread.sleep(1800);
-            String pid1 = systemUiPid();
-            Thread.sleep(4300);
-            String pid2 = systemUiPid();
-
-            boolean stable = pidBefore.equals(pid1) && pidBefore.equals(pid2) && isOverlayEnabled(overlay);
-            if (!stable) {
+            StabilityResult stability = watchSystemUi(pidBefore, overlay);
+            if (!stability.stable) {
                 disableOverlay(overlay);
                 if (simpleName != null) unregisterSimple(context, simpleName);
+                if (isWifi(element)) sweepWifiFamily(context, element);
                 clearTrackedOverlay(element);
+                cancelWatchdog(watchdogPid);
                 writeState(element, "AUTO_REVERTED");
-                return new Result(false, label(element) + ": AUTO-REVERTIDO; SystemUI reinició/cambió durante la prueba.");
+                return new Result(false, label(element)
+                        + ": AUTO-REVERTIDO · SystemUI no estabilizó (cambios PID="
+                        + stability.pidChanges + ").");
             }
 
             cancelWatchdog(watchdogPid);
             writeState(element, "STABLE");
-            return new Result(true, label(element) + ": ESTABLE · watchdog superado.");
+            String restartNote = stability.pidChanges == 1 ? " · 1 recarga tolerada" : "";
+            return new Result(true, label(element) + ": ESTABLE · watchdog superado" + restartNote + ".");
         } catch (InterruptedException e) {
+            cancelWatchdog(watchdogPid);
             if (!overlay.isBlank()) disableOverlay(overlay);
             if (simpleName != null) unregisterSimple(context, simpleName);
+            if (isWifi(element)) sweepWifiFamily(context, element);
             clearTrackedOverlay(element);
             writeState(element, "AUTO_REVERTED");
+            Thread.currentThread().interrupt();
             return new Result(false, label(element) + ": prueba interrumpida; restaurado.");
         } catch (Throwable t) {
+            cancelWatchdog(watchdogPid);
             try { if (!overlay.isBlank()) disableOverlay(overlay); } catch (Throwable ignored) {}
             try { if (simpleName != null) unregisterSimple(context, simpleName); } catch (Throwable ignored) {}
+            try { if (isWifi(element)) sweepWifiFamily(context, element); } catch (Throwable ignored) {}
             clearTrackedOverlay(element);
             writeState(element, "AUTO_REVERTED");
             return new Result(false, label(element) + ": fallo seguro: " + t.getClass().getSimpleName());
@@ -144,16 +167,11 @@ final class RootOverlayController {
     }
 
     static Result disable(Context context, String element) {
+        Result root = requireRoot();
+        if (!root.ok) return root;
+
         if (isWifi(element)) {
-            String tracked = readTrackedOverlay(element);
-            if (!tracked.isBlank()) {
-                disableOverlay(tracked);
-                unregisterSimple(context, simpleNameFromId(tracked));
-            }
-            String legacy = WIFI_BASE.equals(element) ? LEGACY_WIFI_BASE : LEGACY_WIFI6;
-            disableOverlay(legacy);
-            unregisterSimple(context, simpleNameFromId(legacy));
-            clearTrackedOverlay(element);
+            cleanupWifiElement(context, element);
         } else {
             disableOverlay(fixedOverlayFor(element));
         }
@@ -166,12 +184,7 @@ final class RootOverlayController {
     }
 
     static boolean isEnabled(String element) {
-        if (isWifi(element)) {
-            String tracked = readTrackedOverlay(element);
-            if (!tracked.isBlank() && isOverlayEnabled(tracked)) return true;
-            String legacy = WIFI_BASE.equals(element) ? LEGACY_WIFI_BASE : LEGACY_WIFI6;
-            return isOverlayEnabled(legacy);
-        }
+        if (isWifi(element)) return wifiFamilyHasEnabled(element);
         return isOverlayEnabled(fixedOverlayFor(element));
     }
 
@@ -186,12 +199,10 @@ final class RootOverlayController {
     static void cleanupObsoleteWifi(Context context) {
         disableOverlay(OLD_WIFI_OVERLAY);
         unregisterSimple(context, "PixelStatusWifi");
-
-        disableOverlay(LEGACY_WIFI_BASE);
-        unregisterSimple(context, "PixelStatusWifiBase");
-
-        disableOverlay(LEGACY_WIFI6);
-        unregisterSimple(context, "PixelStatusWifi6");
+        sweepWifiFamily(context, WIFI_BASE);
+        sweepWifiFamily(context, WIFI6);
+        clearTrackedOverlay(WIFI_BASE);
+        clearTrackedOverlay(WIFI6);
     }
 
     static Result restoreAll(Context context) {
@@ -199,8 +210,8 @@ final class RootOverlayController {
         if (!root.ok) return root;
 
         disableOverlay(MOBILE_OVERLAY);
-        disable(context, WIFI_BASE);
-        disable(context, WIFI6);
+        cleanupWifiElement(context, WIFI_BASE);
+        cleanupWifiElement(context, WIFI6);
         disableOverlay(BATTERY_OVERLAY);
         disableOverlay(CLOCK_OVERLAY);
         disableOverlay(OLD_WIFI_OVERLAY);
@@ -219,12 +230,42 @@ final class RootOverlayController {
                 : new Result(false, "Quedó algún overlay activo; no desinstales todavía.");
     }
 
+    private static StabilityResult watchSystemUi(String pidBefore, String overlay) throws InterruptedException {
+        String previous = pidBefore;
+        String finalPid = pidBefore;
+        int changes = 0;
+        int stableSamples = 0;
+
+        // One PID transition is allowed: applying a resource overlay can legitimately reload SystemUI once.
+        // Two transitions, a missing PID, or failure to remain steady afterwards are treated as a crash loop.
+        for (int i = 0; i < 6; i++) {
+            Thread.sleep(i == 0 ? 1200 : 1400);
+            String current = systemUiPid();
+            if (current.isBlank()) return new StabilityResult(false, changes + 1, "");
+
+            if (!current.equals(previous)) {
+                changes++;
+                stableSamples = 0;
+                previous = current;
+            } else {
+                stableSamples++;
+            }
+            finalPid = current;
+
+            if (changes > 1) return new StabilityResult(false, changes, finalPid);
+            if (!isOverlayEnabled(overlay)) return new StabilityResult(false, changes, finalPid);
+        }
+
+        boolean stable = changes <= 1 && stableSamples >= 2 && isOverlayEnabled(overlay);
+        return new StabilityResult(stable, changes, finalPid);
+    }
+
     private static boolean waitForSystemUiStable() throws InterruptedException {
         String p0 = systemUiPid();
         if (p0.isBlank()) return false;
-        Thread.sleep(1300);
+        Thread.sleep(900);
         String p1 = systemUiPid();
-        Thread.sleep(1300);
+        Thread.sleep(900);
         String p2 = systemUiPid();
         return p0.equals(p1) && p0.equals(p2) && !p2.isBlank();
     }
@@ -235,12 +276,56 @@ final class RootOverlayController {
             disableOverlay(tracked);
             unregisterSimple(context, simpleNameFromId(tracked));
         }
-        String legacy = WIFI_BASE.equals(element) ? LEGACY_WIFI_BASE : LEGACY_WIFI6;
-        disableOverlay(legacy);
-        unregisterSimple(context, simpleNameFromId(legacy));
+        sweepWifiFamily(context, element);
         disableOverlay(OLD_WIFI_OVERLAY);
         unregisterSimple(context, "PixelStatusWifi");
         clearTrackedOverlay(element);
+    }
+
+    private static void sweepWifiFamily(Context context, String element) {
+        String dynamicPrefix = WIFI_BASE.equals(element) ? OWNER + "PixelStatusWifiBase_" : OWNER + "PixelStatusWifi6_";
+        String legacy = WIFI_BASE.equals(element) ? LEGACY_WIFI_BASE : LEGACY_WIFI6;
+
+        Set<String> ids = new LinkedHashSet<>();
+        ids.add(legacy);
+        ExecResult list = su("cmd overlay list --user 0 com.android.systemui 2>/dev/null");
+        if (list.code == 0) {
+            for (String raw : list.out.split("\\n")) {
+                String line = raw.trim();
+                int start = line.indexOf(OWNER);
+                if (start < 0) continue;
+                String id = line.substring(start).trim();
+                int ws = firstWhitespace(id);
+                if (ws >= 0) id = id.substring(0, ws);
+                if (id.startsWith(dynamicPrefix)) ids.add(id);
+            }
+        }
+
+        for (String id : ids) {
+            disableOverlay(id);
+            unregisterSimple(context, simpleNameFromId(id));
+        }
+    }
+
+    private static boolean wifiFamilyHasEnabled(String element) {
+        String dynamicPrefix = WIFI_BASE.equals(element) ? OWNER + "PixelStatusWifiBase_" : OWNER + "PixelStatusWifi6_";
+        String legacy = WIFI_BASE.equals(element) ? LEGACY_WIFI_BASE : LEGACY_WIFI6;
+        ExecResult list = su("cmd overlay list --user 0 com.android.systemui 2>/dev/null");
+        if (list.code != 0) return false;
+
+        for (String raw : list.out.split("\\n")) {
+            String line = raw.trim();
+            if (!line.startsWith("[x]")) continue;
+            if (line.contains(legacy) || line.contains(dynamicPrefix)) return true;
+        }
+        return false;
+    }
+
+    private static int firstWhitespace(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            if (Character.isWhitespace(s.charAt(i))) return i;
+        }
+        return -1;
     }
 
     private static String uniqueWifiSimpleName(String element) {
@@ -251,7 +336,7 @@ final class RootOverlayController {
     private static String armWatchdog(Context context, String element, String overlay, String simpleName) {
         String state = stateFile(element);
         StringBuilder body = new StringBuilder();
-        body.append("sleep 18; cmd overlay disable --user 0 '").append(overlay).append("' >/dev/null 2>&1; ");
+        body.append("sleep 20; cmd overlay disable --user 0 '").append(overlay).append("' >/dev/null 2>&1; ");
         if (simpleName != null) {
             String apk = shellQuote(context.getApplicationInfo().sourceDir);
             body.append("CLASSPATH=").append(apk).append(" app_process /system/bin ")

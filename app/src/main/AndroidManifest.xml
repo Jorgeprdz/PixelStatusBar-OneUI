@@ -1,18 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
     <application
         android:allowBackup="false"
         android:label="Pixel Status Bar"
         android:supportsRtl="true"
         android:theme="@style/Theme.PixelStatusBar">
-
-        <provider
-            android:name=".SettingsProvider"
-            android:authorities="com.jorge.pixelstatusbar.oneui.settings"
-            android:directBootAware="true"
-            android:exported="true" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -22,5 +14,4 @@
             </intent-filter>
         </activity>
     </application>
-
 </manifest>

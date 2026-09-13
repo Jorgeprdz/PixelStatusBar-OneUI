@@ -25,6 +25,9 @@ public final class MainActivity extends Activity {
     private final Map<String, Switch> switches = new LinkedHashMap<>();
     private final Map<String, TextView> statuses = new LinkedHashMap<>();
     private boolean updating;
+    private TextView rootStatus;
+    private Button retryRoot;
+    private Button restoreAll;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -44,27 +47,37 @@ public final class MainActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView title = text("Pixel Status Bar", 28, true);
-        root.addView(title);
+        root.addView(text("Pixel Status Bar", 28, true));
 
-        TextView sub = text("v0.16 SAFE CORE · One UI 8.5 · S25 · root temporal", 15, false);
+        TextView sub = text("v0.17 TRUTHFUL CORE · One UI 8.5 · S25 · root temporal", 15, false);
         sub.setAlpha(.70f);
-        sub.setPadding(0, dp(6), 0, dp(22));
+        sub.setPadding(0, dp(6), 0, dp(14));
         root.addView(sub);
 
+        rootStatus = text("ROOT: comprobando…", 14, true);
+        rootStatus.setPadding(0, 0, 0, dp(8));
+        root.addView(rootStatus);
+
+        retryRoot = new Button(this);
+        retryRoot.setText("Reintentar acceso root");
+        retryRoot.setAllCaps(false);
+        retryRoot.setOnClickListener(v -> refreshAsync(false));
+        root.addView(retryRoot, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         TextView intro = text(
-                "Sólo señal móvil y Wi‑Fi. Wi‑Fi ahora remapea en un único FRRO todas las familias reales de Samsung "
-                        + "(base, Wi‑Fi 5, 6, 6E y 7; stat_sys y sec_ic). El watchdog ya no auto-revierte por una sola "
-                        + "recarga tardía de SystemUI: sólo revierte ante loop real. Sin geometría, batería, reloj ni dimensiones.",
+                "La app ya no llama ‘estable’ a un overlay sólo por estar habilitado. "
+                        + "Muestra ROOT real y FRRO real por separado. La parte visual se marca como ‘verifica icono’. "
+                        + "Sólo señal y Wi‑Fi; sin geometría, batería, reloj ni dimensiones.",
                 14, false);
         intro.setAlpha(.75f);
-        intro.setPadding(0, 0, 0, dp(18));
+        intro.setPadding(0, dp(14), 0, dp(18));
         root.addView(intro);
 
         addElement(root, RootOverlayController.MOBILE, "Señal móvil Pixel");
         addElement(root, RootOverlayController.WIFI, "Wi‑Fi Pixel");
 
-        Button restoreAll = new Button(this);
+        restoreAll = new Button(this);
         restoreAll.setText("Restaurar todo Samsung");
         restoreAll.setAllCaps(false);
         restoreAll.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
@@ -74,32 +87,22 @@ public final class MainActivity extends Activity {
         restoreParams.setMargins(0, dp(22), 0, dp(8));
         root.addView(restoreAll, restoreParams);
         restoreAll.setOnClickListener(v -> {
-            setAllSwitchesEnabled(false);
-            restoreAll.setEnabled(false);
+            setControlsEnabled(false);
             worker.execute(() -> {
                 RootOverlayController.Result r = RootOverlayController.restoreAll(this);
                 runOnUiThread(() -> {
-                    refreshUiStates();
                     restoreAll.setText(r.ok ? "Todo Samsung restaurado" : r.message);
-                    restoreAll.setEnabled(true);
-                    setAllSwitchesEnabled(true);
+                    refreshAsync(false);
                 });
             });
         });
 
-        TextView retired = text(
-                "Retirado por seguridad: Geometría Pixel, Batería Pixel y Reloj Pixel. Esta versión no contiene controles para activarlos.",
-                13, true);
-        retired.setAlpha(.72f);
-        retired.setPadding(0, dp(18), 0, 0);
-        root.addView(retired);
-
         TextView safety = text(
-                "Al abrir v0.16 se eliminan los FRRO Wi‑Fi viejos para evitar estados falsos. "
+                "Si ROOT aparece como SIN ROOT EN APP, los switches quedan bloqueados y no se muestran estados viejos. "
                         + "No toca /system, boot, vbmeta, SystemUI.apk, service.d ni LSPosed.",
                 13, false);
         safety.setAlpha(.62f);
-        safety.setPadding(0, dp(12), 0, 0);
+        safety.setPadding(0, dp(14), 0, 0);
         root.addView(safety);
 
         return scroll;
@@ -114,8 +117,7 @@ public final class MainActivity extends Activity {
         LinearLayout textCol = new LinearLayout(this);
         textCol.setOrientation(LinearLayout.VERTICAL);
 
-        TextView labelView = text(label, 18, false);
-        textCol.addView(labelView);
+        textCol.addView(text(label, 18, false));
 
         TextView status = text("Comprobando…", 14, false);
         status.setAlpha(.68f);
@@ -138,13 +140,9 @@ public final class MainActivity extends Activity {
 
     private void onSwitchChanged(String key, boolean checked) {
         if (updating) return;
-        setAllSwitchesEnabled(false);
+        setControlsEnabled(false);
         TextView status = statuses.get(key);
-        if (status != null) {
-            if (!checked) status.setText("Restaurando Samsung y limpiando FRRO…");
-            else if (RootOverlayController.WIFI.equals(key)) status.setText("PROBANDO… familias Wi‑Fi Samsung completas");
-            else status.setText("PROBANDO… señal móvil · watchdog anti-loop");
-        }
+        if (status != null) status.setText(checked ? "Aplicando FRRO…" : "Restaurando Samsung…");
 
         worker.execute(() -> {
             RootOverlayController.Result r = checked
@@ -152,43 +150,85 @@ public final class MainActivity extends Activity {
                     : RootOverlayController.disable(this, key);
             runOnUiThread(() -> {
                 if (status != null) status.setText(r.message);
-                refreshUiStates();
-                setAllSwitchesEnabled(true);
+                refreshAsync(false);
             });
         });
     }
 
     private void refreshAsync(boolean cleanupOldWifi) {
-        setAllSwitchesEnabled(false);
+        setControlsEnabled(false);
         worker.execute(() -> {
-            if (cleanupOldWifi) RootOverlayController.cleanupObsoleteWifi(this);
-            runOnUiThread(() -> {
-                refreshUiStates();
-                setAllSwitchesEnabled(true);
-            });
+            RootOverlayController.RootInfo root = RootOverlayController.rootInfo();
+            if (root.ok && cleanupOldWifi) RootOverlayController.cleanupObsoleteWifi(this);
+
+            boolean mobileOn = false;
+            boolean wifiOn = false;
+            String mobileState = "SIN_ROOT";
+            String wifiState = "SIN_ROOT";
+            if (root.ok) {
+                mobileOn = RootOverlayController.isEnabled(RootOverlayController.MOBILE);
+                wifiOn = RootOverlayController.isEnabled(RootOverlayController.WIFI);
+                mobileState = RootOverlayController.state(RootOverlayController.MOBILE);
+                wifiState = RootOverlayController.state(RootOverlayController.WIFI);
+            }
+
+            final boolean fMobileOn = mobileOn;
+            final boolean fWifiOn = wifiOn;
+            final String fMobileState = mobileState;
+            final String fWifiState = wifiState;
+            runOnUiThread(() -> applyUi(root, fMobileOn, fWifiOn, fMobileState, fWifiState));
         });
     }
 
-    private void refreshUiStates() {
+    private void applyUi(RootOverlayController.RootInfo root, boolean mobileOn, boolean wifiOn,
+            String mobileState, String wifiState) {
         updating = true;
-        for (String key : switches.keySet()) {
-            boolean on = RootOverlayController.isEnabled(key);
-            Switch sw = switches.get(key);
-            if (sw != null) sw.setChecked(on);
-            TextView status = statuses.get(key);
-            if (status == null) continue;
+        rootStatus.setText(root.message);
+        rootStatus.setAlpha(root.ok ? 1f : .72f);
 
-            String state = RootOverlayController.state(key);
-            if ("ESTABLE".equals(state)) status.setText("ESTABLE · ON");
-            else if ("AUTO-REVERTIDO".equals(state)) status.setText("AUTO-REVERTIDO · Samsung restaurado");
-            else if (on) status.setText("ON · activo");
-            else status.setText("OFF · Samsung");
+        if (!root.ok) {
+            for (Switch sw : switches.values()) {
+                sw.setChecked(false);
+                sw.setEnabled(false);
+            }
+            for (TextView status : statuses.values()) {
+                status.setText("SIN ROOT EN APP · estado FRRO no comprobado");
+            }
+            retryRoot.setEnabled(true);
+            restoreAll.setEnabled(false);
+            updating = false;
+            return;
         }
+
+        setSwitch(RootOverlayController.MOBILE, mobileOn);
+        setSwitch(RootOverlayController.WIFI, wifiOn);
+        setStateText(RootOverlayController.MOBILE, mobileState);
+        setStateText(RootOverlayController.WIFI, wifiState);
+
+        retryRoot.setEnabled(true);
+        restoreAll.setEnabled(true);
+        for (Switch sw : switches.values()) sw.setEnabled(true);
         updating = false;
     }
 
-    private void setAllSwitchesEnabled(boolean enabled) {
+    private void setSwitch(String key, boolean checked) {
+        Switch sw = switches.get(key);
+        if (sw != null) sw.setChecked(checked);
+    }
+
+    private void setStateText(String key, String state) {
+        TextView status = statuses.get(key);
+        if (status == null) return;
+        if ("ACTIVO".equals(state)) status.setText("FRRO ACTIVO · verifica icono");
+        else if ("AUTO-REVERTIDO".equals(state)) status.setText("AUTO-REVERTIDO · Samsung restaurado");
+        else if ("ERROR".equals(state)) status.setText("ERROR · FRRO no activo");
+        else status.setText("OFF · Samsung");
+    }
+
+    private void setControlsEnabled(boolean enabled) {
         for (CompoundButton sw : switches.values()) sw.setEnabled(enabled);
+        if (retryRoot != null) retryRoot.setEnabled(enabled);
+        if (restoreAll != null) restoreAll.setEnabled(enabled);
     }
 
     private void tintSwitch(Switch sw) {

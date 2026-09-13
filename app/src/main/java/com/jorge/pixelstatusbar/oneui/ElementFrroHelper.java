@@ -9,16 +9,27 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Modular fabricated overlays. Wi-Fi may use a unique simple name per activation,
- * allowing a full disable + unregister lifecycle instead of reusing stale FRRO state.
- */
+/** v0.16: reference-only Wi-Fi FRRO helper. No dimensions are modified. */
 public final class ElementFrroHelper {
     private static final String OWNER = "com.android.shell";
     private static final String TARGET = "com.android.systemui";
 
+    // Internal AOSP/Pixel-style drawables already present in this exact Samsung SystemUI.
     private static final int[] WIFI_REFS = {
             0x7e080e33, 0x7e080e35, 0x7e080e37, 0x7e080e39, 0x7e080e39
+    };
+
+    private static final String[] WIFI_ALL_PREFIXES = {
+            "stat_sys_wifi_signal_",
+            "stat_sys_wifi5_signal_",
+            "stat_sys_wifi6_signal_",
+            "stat_sys_6ewifi_signal_",
+            "stat_sys_wifi7_signal_",
+            "sec_ic_wifi_signal_",
+            "sec_ic_wifi_signal_wifi5_",
+            "sec_ic_wifi_signal_wifi6_",
+            "sec_ic_wifi_signal_wifi6e_",
+            "sec_ic_wifi7_signal_"
     };
 
     public static void main(String[] args) {
@@ -85,50 +96,16 @@ public final class ElementFrroHelper {
         Field data = entryClass.getField("data");
         Field configuration = entryClass.getField("configuration");
 
-        switch (element) {
-            case "wifi_base":
-                addWifi(entries, entryCtor, resourceName, dataType, data, configuration, "stat_sys_wifi_signal_");
-                break;
-            case "wifi6":
-                addWifi(entries, entryCtor, resourceName, dataType, data, configuration, "stat_sys_wifi6_signal_");
-                break;
-            case "geometry":
-                // Pixel/AOSP master geometry: spacing is mostly per-icon horizontal padding,
-                // not status_bar_system_icon_spacing. Keep this isolated from battery/clock.
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                        "status_bar_horizontal_padding", 2.5f, 2);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                        "status_bar_wifi_signal_spacer_width", 2.5f, 2);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                        "status_bar_wifi_signal_size", 15f, 2);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                        "status_bar_mobile_signal_size", 15f, 2);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                        "status_bar_mobile_signal_size_updated", 15f, 2);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                        "status_bar_system_icon_spacing", 0f, 2);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                        "status_bar_icons_padding_start", 3f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration,
-                        "status_bar_icons_padding_end", 4f, 1);
-                break;
-            case "battery":
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_chip_width", 20.6f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_chip_height", 12f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_chip_radius", 6f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_unified_icon_width", 20.6f, 2);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_battery_unified_icon_height", 12f, 2);
-                break;
-            case "clock":
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_clock_size", 14f, 2);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "sec_status_bar_clock_size", 14f, 2);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_clock_starting_padding", 4f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_clock_end_padding", 0f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_left_clock_starting_padding", 0f, 1);
-                addDimen(entries, entryCtor, resourceName, dataType, data, configuration, "status_bar_left_clock_end_padding", 2f, 2);
-                break;
-            default:
-                throw new IllegalArgumentException("unknown element: " + element);
+        if ("wifi_all".equals(element)) {
+            for (String prefix : WIFI_ALL_PREFIXES) {
+                addWifi(entries, entryCtor, resourceName, dataType, data, configuration, prefix);
+            }
+        } else if ("wifi_base".equals(element)) {
+            addWifi(entries, entryCtor, resourceName, dataType, data, configuration, "stat_sys_wifi_signal_");
+        } else if ("wifi6".equals(element)) {
+            addWifi(entries, entryCtor, resourceName, dataType, data, configuration, "stat_sys_wifi6_signal_");
+        } else {
+            throw new IllegalArgumentException("unsafe/unknown element: " + element);
         }
 
         Object builder = transactionBuilder();
@@ -159,8 +136,8 @@ public final class ElementFrroHelper {
     }
 
     private static Object transactionBuilder() throws Exception {
-        Class<?> txBuilderClass = Class.forName("android.content.om.OverlayManagerTransaction$Builder");
-        Constructor<?> c = txBuilderClass.getDeclaredConstructor();
+        Class<?> cls = Class.forName("android.content.om.OverlayManagerTransaction$Builder");
+        Constructor<?> c = cls.getDeclaredConstructor();
         c.setAccessible(true);
         return c.newInstance();
     }
@@ -213,30 +190,11 @@ public final class ElementFrroHelper {
         entries.add(entry);
     }
 
-    private static void addDimen(List entries, Constructor<?> entryCtor, Field resourceName,
-            Field dataType, Field data, Field configuration, String name, float value, int unit) throws Exception {
-        Object entry = entryCtor.newInstance();
-        resourceName.set(entry, TARGET + ":dimen/" + name);
-        dataType.setInt(entry, 0x05);
-        data.setInt(entry, createComplexDimension(value, unit));
-        configuration.set(entry, null);
-        entries.add(entry);
-    }
-
-    private static int createComplexDimension(float value, int unit) throws Exception {
-        Class<?> tv = Class.forName("android.util.TypedValue");
-        Method m = tv.getDeclaredMethod("createComplexDimension", float.class, int.class);
-        m.setAccessible(true);
-        return (Integer) m.invoke(null, value, unit);
-    }
-
     static String simpleName(String element) {
         switch (element) {
+            case "wifi_all": return "PixelStatusWifiAll";
             case "wifi_base": return "PixelStatusWifiBase";
             case "wifi6": return "PixelStatusWifi6";
-            case "geometry": return "PixelStatusGeometry";
-            case "battery": return "PixelStatusBattery";
-            case "clock": return "PixelStatusClock";
             default: throw new IllegalArgumentException("unknown element");
         }
     }
@@ -255,7 +213,8 @@ public final class ElementFrroHelper {
 
     private static Throwable unwrap(Throwable t) {
         Throwable cur = t;
-        while (cur instanceof InvocationTargetException && ((InvocationTargetException) cur).getTargetException() != null) {
+        while (cur instanceof InvocationTargetException
+                && ((InvocationTargetException) cur).getTargetException() != null) {
             cur = ((InvocationTargetException) cur).getTargetException();
         }
         return cur;

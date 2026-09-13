@@ -7,7 +7,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-/** v0.16 SAFE CORE: mobile + one Wi-Fi FRRO, references only, no dimensions. */
+/** v0.17: truthful root/FRRO state. References only; no dimensions. */
 final class RootOverlayController {
     static final String MOBILE = "mobile";
     static final String WIFI = "wifi";
@@ -15,13 +15,21 @@ final class RootOverlayController {
     private static final String OWNER = "com.android.shell:";
     private static final String MOBILE_OVERLAY = OWNER + "PixelStatusNative";
     private static final String WIFI_DYNAMIC_PREFIX = OWNER + "PixelStatusWifiAll_";
-
     private static final String STATE_DIR = "/data/local/tmp/";
 
     static final class Result {
         final boolean ok;
         final String message;
         Result(boolean ok, String message) {
+            this.ok = ok;
+            this.message = message;
+        }
+    }
+
+    static final class RootInfo {
+        final boolean ok;
+        final String message;
+        RootInfo(boolean ok, String message) {
             this.ok = ok;
             this.message = message;
         }
@@ -36,31 +44,38 @@ final class RootOverlayController {
         }
     }
 
-    private static final class StabilityResult {
-        final boolean stable;
+    private static final class HealthResult {
+        final boolean healthy;
         final int pidChanges;
-        StabilityResult(boolean stable, int pidChanges) {
-            this.stable = stable;
+        HealthResult(boolean healthy, int pidChanges) {
+            this.healthy = healthy;
             this.pidChanges = pidChanges;
         }
+    }
+
+    static RootInfo rootInfo() {
+        ExecResult r = su("id");
+        int appUid = android.os.Process.myUid();
+        if (r.code == 0 && r.out.contains("uid=0")) {
+            return new RootInfo(true, "ROOT OK · app UID " + appUid + " · " + firstUseful(r.out, 160));
+        }
+        String detail = firstUseful(r.out, 220);
+        if (detail.isBlank()) detail = "su no devolvió salida";
+        return new RootInfo(false, "SIN ROOT EN APP · UID " + appUid + " · " + detail);
     }
 
     static Result enable(Context context, String element) {
         if (MOBILE.equals(element)) return enableMobile(context);
         if (WIFI.equals(element)) return enableWifi(context);
-        return new Result(false, "Elemento no soportado en SAFE CORE.");
+        return new Result(false, "Elemento no soportado.");
     }
 
     private static Result enableMobile(Context context) {
-        Result root = requireRoot();
-        if (!root.ok) return root;
+        RootInfo root = rootInfo();
+        if (!root.ok) return new Result(false, root.message);
 
         String watchdogPid = "";
         try {
-            if (!waitForSystemUiSettled()) {
-                return new Result(false, "Señal móvil: SystemUI aún se estaba asentando; no activé nada.");
-            }
-
             disableOverlay(MOBILE_OVERLAY);
 
             String apk = shellQuote(context.getApplicationInfo().sourceDir);
@@ -68,14 +83,14 @@ final class RootOverlayController {
                     + "com.jorge.pixelstatusbar.oneui.FrroHelper register 2>&1");
             if (reg.code != 0 || !reg.out.contains("REGISTERED")) {
                 disableOverlay(MOBILE_OVERLAY);
-                writeState(MOBILE, "AUTO_REVERTED");
-                return new Result(false, "Señal móvil: no pude registrar FRRO:\n" + firstUseful(reg.out, 900));
+                writeState(MOBILE, "ERROR");
+                return new Result(false, "Señal móvil: no pude registrar FRRO · " + firstUseful(reg.out, 700));
             }
 
             String pidBefore = systemUiPid();
             if (pidBefore.isBlank()) {
                 disableOverlay(MOBILE_OVERLAY);
-                writeState(MOBILE, "AUTO_REVERTED");
+                writeState(MOBILE, "ERROR");
                 return new Result(false, "Señal móvil: SystemUI no estaba disponible.");
             }
 
@@ -86,47 +101,44 @@ final class RootOverlayController {
             if (en.code != 0 || !isOverlayEnabled(MOBILE_OVERLAY)) {
                 cancelWatchdog(watchdogPid);
                 disableOverlay(MOBILE_OVERLAY);
-                writeState(MOBILE, "AUTO_REVERTED");
-                return new Result(false, "Señal móvil: Samsung rechazó el overlay; restaurado.");
+                writeState(MOBILE, "ERROR");
+                return new Result(false, "Señal móvil: Samsung rechazó el FRRO; restaurado.");
             }
             su("cmd overlay set-priority '" + MOBILE_OVERLAY + "' highest >/dev/null 2>&1 || true");
 
-            StabilityResult stability = watchForCrashLoop(pidBefore, MOBILE_OVERLAY);
-            if (!stability.stable) {
+            // Mobile references were already proven visually in v0.7. We only guard against an actual loop.
+            HealthResult health = watchSystemUiHealth(pidBefore, MOBILE_OVERLAY, 3);
+            if (!health.healthy) {
                 cancelWatchdog(watchdogPid);
                 disableOverlay(MOBILE_OVERLAY);
                 writeState(MOBILE, "AUTO_REVERTED");
-                return new Result(false, "Señal móvil: AUTO-REVERTIDO · detecté inestabilidad real (PID="
-                        + stability.pidChanges + ").");
+                return new Result(false, "Señal móvil: AUTO-REVERTIDO · loop real detectado (cambios PID="
+                        + health.pidChanges + ").");
             }
 
             cancelWatchdog(watchdogPid);
-            writeState(MOBILE, "STABLE");
-            return new Result(true, "Señal móvil: ESTABLE · ON"
-                    + (stability.pidChanges == 1 ? " · 1 recarga tolerada" : "") + ".");
+            writeState(MOBILE, "ACTIVE");
+            return new Result(true, "Señal móvil: FRRO ACTIVO · verifica el icono"
+                    + (health.pidChanges > 0 ? " · recargas SystemUI=" + health.pidChanges : "") + ".");
         } catch (InterruptedException e) {
             cancelWatchdog(watchdogPid);
             disableOverlay(MOBILE_OVERLAY);
-            writeState(MOBILE, "AUTO_REVERTED");
+            writeState(MOBILE, "ERROR");
             Thread.currentThread().interrupt();
             return new Result(false, "Señal móvil: prueba interrumpida; Samsung restaurado.");
         }
     }
 
     private static Result enableWifi(Context context) {
-        Result root = requireRoot();
-        if (!root.ok) return root;
+        RootInfo root = rootInfo();
+        if (!root.ok) return new Result(false, root.message);
 
         String overlay = "";
         String simpleName = "";
         String watchdogPid = "";
         try {
             cleanupAllWifi(context);
-
-            if (!waitForSystemUiSettled()) {
-                writeState(WIFI, "AUTO_REVERTED");
-                return new Result(false, "Wi‑Fi Pixel: SystemUI aún se estaba asentando; no activé nada.");
-            }
+            Thread.sleep(800);
 
             simpleName = "PixelStatusWifiAll_" + Long.toHexString(System.currentTimeMillis());
             overlay = OWNER + simpleName;
@@ -137,16 +149,15 @@ final class RootOverlayController {
                     + simpleName + "' 2>&1");
             if (reg.code != 0 || !reg.out.contains("REGISTERED")) {
                 cleanupOneWifi(context, overlay, simpleName);
-                writeState(WIFI, "AUTO_REVERTED");
-                return new Result(false, "Wi‑Fi Pixel: no pude registrar FRRO:\n" + firstUseful(reg.out, 900));
+                writeState(WIFI, "ERROR");
+                return new Result(false, "Wi‑Fi Pixel: no pude registrar FRRO · " + firstUseful(reg.out, 700));
             }
 
             writeTrackedWifi(overlay);
-
             String pidBefore = systemUiPid();
             if (pidBefore.isBlank()) {
                 cleanupOneWifi(context, overlay, simpleName);
-                writeState(WIFI, "AUTO_REVERTED");
+                writeState(WIFI, "ERROR");
                 return new Result(false, "Wi‑Fi Pixel: SystemUI no estaba disponible.");
             }
 
@@ -157,36 +168,36 @@ final class RootOverlayController {
             if (en.code != 0 || !isOverlayEnabled(overlay)) {
                 cancelWatchdog(watchdogPid);
                 cleanupOneWifi(context, overlay, simpleName);
-                writeState(WIFI, "AUTO_REVERTED");
-                return new Result(false, "Wi‑Fi Pixel: Samsung rechazó el overlay; restaurado.");
+                writeState(WIFI, "ERROR");
+                return new Result(false, "Wi‑Fi Pixel: Samsung rechazó el FRRO; restaurado.");
             }
             su("cmd overlay set-priority '" + overlay + "' highest >/dev/null 2>&1 || true");
 
-            StabilityResult stability = watchForCrashLoop(pidBefore, overlay);
-            if (!stability.stable) {
+            HealthResult health = watchSystemUiHealth(pidBefore, overlay, 2);
+            if (!health.healthy) {
                 cancelWatchdog(watchdogPid);
                 cleanupOneWifi(context, overlay, simpleName);
                 writeState(WIFI, "AUTO_REVERTED");
-                return new Result(false, "Wi‑Fi Pixel: AUTO-REVERTIDO · detecté inestabilidad real (PID="
-                        + stability.pidChanges + ").");
+                return new Result(false, "Wi‑Fi Pixel: AUTO-REVERTIDO · loop real detectado (cambios PID="
+                        + health.pidChanges + ").");
             }
 
             cancelWatchdog(watchdogPid);
-            writeState(WIFI, "STABLE");
-            return new Result(true, "Wi‑Fi Pixel: ESTABLE · familias Samsung remapeadas"
-                    + (stability.pidChanges == 1 ? " · 1 recarga tolerada" : "") + ".");
+            writeState(WIFI, "ACTIVE");
+            return new Result(true, "Wi‑Fi Pixel: FRRO ACTIVO · verifica el icono"
+                    + (health.pidChanges > 0 ? " · recargas SystemUI=" + health.pidChanges : "") + ".");
         } catch (InterruptedException e) {
             cancelWatchdog(watchdogPid);
             cleanupOneWifi(context, overlay, simpleName);
-            writeState(WIFI, "AUTO_REVERTED");
+            writeState(WIFI, "ERROR");
             Thread.currentThread().interrupt();
             return new Result(false, "Wi‑Fi Pixel: prueba interrumpida; Samsung restaurado.");
         }
     }
 
     static Result disable(Context context, String element) {
-        Result root = requireRoot();
-        if (!root.ok) return root;
+        RootInfo root = rootInfo();
+        if (!root.ok) return new Result(false, root.message);
 
         if (MOBILE.equals(element)) {
             disableOverlay(MOBILE_OVERLAY);
@@ -199,7 +210,7 @@ final class RootOverlayController {
         if (WIFI.equals(element)) {
             cleanupAllWifi(context);
             writeState(WIFI, "OFF");
-            return !isEnabled(WIFI)
+            return !anyWifiEnabled()
                     ? new Result(true, "Wi‑Fi Pixel: OFF · Samsung restaurado.")
                     : new Result(false, "Wi‑Fi Pixel: quedó algún FRRO activo.");
         }
@@ -214,59 +225,51 @@ final class RootOverlayController {
     }
 
     static String state(String element) {
+        RootInfo root = rootInfo();
+        if (!root.ok) return "SIN_ROOT";
+        if (isEnabled(element)) return "ACTIVO";
         String raw = su("cat '" + stateFile(element) + "' 2>/dev/null | head -1").out.trim();
-        if (isEnabled(element)) return "STABLE".equals(raw) ? "ESTABLE" : "ON";
-        if ("AUTO_REVERTED".equals(raw) || "TESTING".equals(raw)) return "AUTO-REVERTIDO";
+        if ("AUTO_REVERTED".equals(raw)) return "AUTO-REVERTIDO";
+        if ("ERROR".equals(raw)) return "ERROR";
         return "OFF";
     }
 
-    /** Called once on app creation: v0.16 deliberately drops all stale v0.10-v0.15 Wi-Fi FRROs. */
     static void cleanupObsoleteWifi(Context context) {
-        Result root = requireRoot();
-        if (!root.ok) return;
+        if (!rootInfo().ok) return;
         cleanupAllWifi(context);
         writeState(WIFI, "OFF");
     }
 
     static Result restoreAll(Context context) {
-        Result root = requireRoot();
-        if (!root.ok) return root;
+        RootInfo root = rootInfo();
+        if (!root.ok) return new Result(false, root.message);
 
         disableOverlay(MOBILE_OVERLAY);
         cleanupAllWifi(context);
-
-        // Retired experiments from older builds: disable + unregister so they cannot linger.
         cleanupNamedOverlay(context, "PixelStatusGeometry");
         cleanupNamedOverlay(context, "PixelStatusBattery");
         cleanupNamedOverlay(context, "PixelStatusClock");
 
         writeState(MOBILE, "OFF");
         writeState(WIFI, "OFF");
-        su("rm -f '" + trackedWifiFile() + "' >/dev/null 2>&1 || true");
 
-        boolean allOff = !isEnabled(MOBILE) && !isEnabled(WIFI)
-                && !isOverlayEnabled(OWNER + "PixelStatusGeometry")
-                && !isOverlayEnabled(OWNER + "PixelStatusBattery")
-                && !isOverlayEnabled(OWNER + "PixelStatusClock");
-        return allOff
+        return !isOverlayEnabled(MOBILE_OVERLAY) && !anyWifiEnabled()
                 ? new Result(true, "Todo Samsung restaurado.")
                 : new Result(false, "Quedó algún overlay activo; no desinstales todavía.");
     }
 
-    private static StabilityResult watchForCrashLoop(String pidBefore, String overlay)
+    private static HealthResult watchSystemUiHealth(String pidBefore, String overlay, int maxPidChanges)
             throws InterruptedException {
         String previous = pidBefore;
         int changes = 0;
         int blankStreak = 0;
 
-        // Observe long enough to catch a loop, but do NOT reject one late, legitimate SystemUI reload.
-        for (int i = 0; i < 14; i++) {
+        for (int i = 0; i < 10; i++) {
             Thread.sleep(1000);
             String current = systemUiPid();
-
             if (current.isBlank()) {
                 blankStreak++;
-                if (blankStreak >= 3) return new StabilityResult(false, changes + 1);
+                if (blankStreak >= 4) return new HealthResult(false, changes);
                 continue;
             }
 
@@ -274,30 +277,12 @@ final class RootOverlayController {
             if (!current.equals(previous)) {
                 changes++;
                 previous = current;
-                if (changes > 1) return new StabilityResult(false, changes);
+                if (changes > maxPidChanges) return new HealthResult(false, changes);
             }
 
-            if (!isOverlayEnabled(overlay)) return new StabilityResult(false, changes);
+            if (!isOverlayEnabled(overlay)) return new HealthResult(false, changes);
         }
-
-        return new StabilityResult(changes <= 1 && isOverlayEnabled(overlay), changes);
-    }
-
-    private static boolean waitForSystemUiSettled() throws InterruptedException {
-        String previous = "";
-        int stable = 0;
-        for (int i = 0; i < 7; i++) {
-            String current = systemUiPid();
-            if (!current.isBlank() && current.equals(previous)) {
-                stable++;
-                if (stable >= 2) return true;
-            } else {
-                stable = 0;
-            }
-            previous = current;
-            Thread.sleep(600);
-        }
-        return false;
+        return new HealthResult(isOverlayEnabled(overlay), changes);
     }
 
     private static void cleanupAllWifi(Context context) {
@@ -349,14 +334,13 @@ final class RootOverlayController {
     }
 
     private static void cleanupNamedOverlay(Context context, String simpleName) {
-        String id = OWNER + simpleName;
-        disableOverlay(id);
+        disableOverlay(OWNER + simpleName);
         unregisterSimple(context, simpleName);
     }
 
     private static String armWatchdog(Context context, String element, String overlay, String simpleName) {
         StringBuilder body = new StringBuilder();
-        body.append("sleep 30; cmd overlay disable --user 0 '").append(overlay)
+        body.append("sleep 32; cmd overlay disable --user 0 '").append(overlay)
                 .append("' >/dev/null 2>&1; ");
         if (simpleName != null && !simpleName.isBlank()) {
             String apk = shellQuote(context.getApplicationInfo().sourceDir);
@@ -395,14 +379,6 @@ final class RootOverlayController {
 
     private static void writeState(String element, String state) {
         su("printf '%s\\n' '" + state + "' > '" + stateFile(element) + "' 2>/dev/null || true");
-    }
-
-    private static Result requireRoot() {
-        ExecResult root = su("id");
-        if (root.code != 0 || !root.out.contains("uid=0")) {
-            return new Result(false, "No obtuve root. Autoriza Pixel Status Bar en KernelSU.");
-        }
-        return new Result(true, "root");
     }
 
     private static boolean isOverlayEnabled(String overlay) {
@@ -450,19 +426,27 @@ final class RootOverlayController {
     }
 
     private static ExecResult su(String command) {
-        Process p = null;
-        try {
-            p = new ProcessBuilder("su", "-c", command).redirectErrorStream(true).start();
-            if (!p.waitFor(20, TimeUnit.SECONDS)) {
-                p.destroyForcibly();
-                return new ExecResult(124, "timeout");
+        String[] bins = {"su", "/system/bin/su", "/system/xbin/su"};
+        ExecResult best = new ExecResult(127, "su no disponible");
+        for (String bin : bins) {
+            java.lang.Process p = null;
+            try {
+                p = new ProcessBuilder(bin, "-c", command).redirectErrorStream(true).start();
+                if (!p.waitFor(20, TimeUnit.SECONDS)) {
+                    p.destroyForcibly();
+                    best = new ExecResult(124, "timeout usando " + bin);
+                    continue;
+                }
+                String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+                ExecResult r = new ExecResult(p.exitValue(), out);
+                if (r.code == 0) return r;
+                if (!out.isBlank()) best = r;
+            } catch (Throwable t) {
+                if (p != null) p.destroyForcibly();
+                best = new ExecResult(127, t.getClass().getSimpleName() + ": " + String.valueOf(t.getMessage()));
             }
-            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            return new ExecResult(p.exitValue(), out.trim());
-        } catch (Throwable t) {
-            if (p != null) p.destroyForcibly();
-            return new ExecResult(127, t.getClass().getSimpleName() + ": " + String.valueOf(t.getMessage()));
         }
+        return best;
     }
 
     private static String shellQuote(String s) {
@@ -470,8 +454,8 @@ final class RootOverlayController {
     }
 
     private static String firstUseful(String s, int max) {
-        if (s == null || s.isBlank()) return "sin detalle";
-        String x = s.replace('\r', ' ').trim();
+        if (s == null || s.isBlank()) return "";
+        String x = s.replace('\r', ' ').replace('\n', ' ').trim();
         return x.length() > max ? x.substring(0, max) : x;
     }
 }

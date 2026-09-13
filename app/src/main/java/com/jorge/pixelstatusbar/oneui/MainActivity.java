@@ -47,15 +47,15 @@ public final class MainActivity extends Activity {
         TextView title = text("Pixel Status Bar", 28, true);
         root.addView(title);
 
-        TextView sub = text("v0.15 SAFE CORE · One UI 8.5 · S25 · root temporal", 15, false);
+        TextView sub = text("v0.16 SAFE CORE · One UI 8.5 · S25 · root temporal", 15, false);
         sub.setAlpha(.70f);
         sub.setPadding(0, dp(6), 0, dp(22));
         root.addView(sub);
 
         TextView intro = text(
-                "Sólo quedan activos los dos cambios que ya demostraron funcionar: señal móvil y Wi‑Fi. "
-                        + "Geometría, batería y reloj quedan retirados de prueba porque tocar dimensiones de SystemUI provocó un reboot completo. "
-                        + "Wi‑Fi conserva limpieza de FRRO antiguos y watchdog independiente.",
+                "Sólo señal móvil y Wi‑Fi. Wi‑Fi ahora remapea en un único FRRO todas las familias reales de Samsung "
+                        + "(base, Wi‑Fi 5, 6, 6E y 7; stat_sys y sec_ic). El watchdog ya no auto-revierte por una sola "
+                        + "recarga tardía de SystemUI: sólo revierte ante loop real. Sin geometría, batería, reloj ni dimensiones.",
                 14, false);
         intro.setAlpha(.75f);
         intro.setPadding(0, 0, 0, dp(18));
@@ -88,14 +88,14 @@ public final class MainActivity extends Activity {
         });
 
         TextView retired = text(
-                "Retirado por seguridad: Geometría Pixel, Batería Pixel y Reloj Pixel. No se pueden activar desde esta versión.",
+                "Retirado por seguridad: Geometría Pixel, Batería Pixel y Reloj Pixel. Esta versión no contiene controles para activarlos.",
                 13, true);
         retired.setAlpha(.72f);
         retired.setPadding(0, dp(18), 0, 0);
         root.addView(retired);
 
         TextView safety = text(
-                "Antes de desinstalar, usa ‘Restaurar todo Samsung’. Los FRRO pertenecen a com.android.shell, no a la APK. "
+                "Al abrir v0.16 se eliminan los FRRO Wi‑Fi viejos para evitar estados falsos. "
                         + "No toca /system, boot, vbmeta, SystemUI.apk, service.d ni LSPosed.",
                 13, false);
         safety.setAlpha(.62f);
@@ -142,8 +142,8 @@ public final class MainActivity extends Activity {
         TextView status = statuses.get(key);
         if (status != null) {
             if (!checked) status.setText("Restaurando Samsung y limpiando FRRO…");
-            else if (RootOverlayController.WIFI.equals(key)) status.setText("PROBANDO… Wi‑Fi base + Wi‑Fi 6");
-            else status.setText("PROBANDO… señal móvil");
+            else if (RootOverlayController.WIFI.equals(key)) status.setText("PROBANDO… familias Wi‑Fi Samsung completas");
+            else status.setText("PROBANDO… señal móvil · watchdog anti-loop");
         }
 
         worker.execute(() -> {
@@ -180,7 +180,6 @@ public final class MainActivity extends Activity {
 
             String state = RootOverlayController.state(key);
             if ("ESTABLE".equals(state)) status.setText("ESTABLE · ON");
-            else if ("PARCIAL".equals(state)) status.setText("PARCIAL · apaga y vuelve a activar Wi‑Fi Pixel");
             else if ("AUTO-REVERTIDO".equals(state)) status.setText("AUTO-REVERTIDO · Samsung restaurado");
             else if (on) status.setText("ON · activo");
             else status.setText("OFF · Samsung");
